@@ -12,39 +12,6 @@ hl.monitor({
     scale = "1",
 })
 
-hl.config({
-    general = {
-        gaps_in = 5,
-        gaps_out = 20,
-        border_size = 2,
-        layout = "dwindle",
-        allow_tearing = false,
-    },
-})
-
-hl.config({
-    decoration = {
-        rounding = 10,
-        active_opacity = 1.0,
-        inactive_opacity = 0.9,
-        blur = {
-            enabled = true,
-            size = 3,
-            passes = 1,
-        },
-    },
-})
-
-hl.config({
-    input = {
-        kb_layout = "us",
-        follow_mouse = 1,
-        touchpad = {
-            natural_scroll = false,
-        },
-    },
-})
-
 hl.env("XCURSOR_SIZE", "24")
 
 hl.bind(mainMod .. " + Q", hl.dsp.exec_cmd(terminal))
@@ -55,6 +22,32 @@ hl.bind(mainMod .. " + right", hl.dsp.focus({ direction = "right" }))
 hl.bind(mainMod .. " + 1", hl.dsp.focus({ workspace = 1 }))
 hl.bind(mainMod .. " + SHIFT + 1", hl.dsp.window.move({ workspace = 1 }))
 hl.bind(mainMod .. " + mouse:272", hl.dsp.window.drag())
+hl.config({
+    general = {
+        gaps_in = 5,
+        gaps_out = 20,
+        border_size = 2,
+        layout = "dwindle",
+        allow_tearing = false,
+    },
+    decoration = {
+        rounding = 10,
+        active_opacity = 1.0,
+        inactive_opacity = 0.9,
+        blur = {
+            enabled = true,
+            size = 3,
+            passes = 1,
+        },
+    },
+    input = {
+        kb_layout = "us",
+        follow_mouse = 1,
+        touchpad = {
+            natural_scroll = false,
+        },
+    },
+})
 
 hl.on("hyprland.start", function()
     hl.exec_cmd("waybar")

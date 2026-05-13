@@ -86,7 +86,9 @@ func TestSmoke(t *testing.T) {
 		`hl.bind(mainMod .. " + left", hl.dsp.focus({ direction = "left" }))`,
 		`hl.bind(mainMod .. " + 1", hl.dsp.focus({ workspace = 1 }))`,
 		`hl.bind(mainMod .. " + SHIFT + 1", hl.dsp.window.move({ workspace = 1 }))`,
-		`hl.bind(mainMod .. " + mouse:272", hl.dsp.window.drag(), { mouse = true })`,
+		// bindm: no HL.BindOptions field exists for 'mouse'; the key string
+		// and dispatcher carry the mouse semantics, so the opts table is omitted.
+		`hl.bind(mainMod .. " + mouse:272", hl.dsp.window.drag())`,
 		`hl.window_rule({`,
 		`class = "^(pavucontrol)$"`,
 		`hl.workspace_rule({`,

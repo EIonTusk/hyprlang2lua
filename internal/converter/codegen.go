@@ -12,9 +12,14 @@ type generator struct {
 
 	// Pending exec / exec-once directives are batched into a single
 	// hl.on("hyprland.start", function() ... end) block at the end so they
-	// run after the rest of the config is applied.
-	execOnce []string
-	exec     []string
+	// run after the rest of the config is applied. execrOnce is kept apart
+	// so the start block can flag the raw-spawn variant — Hyprland's hyprlang
+	// 'execr-once' bypassed Hyprland's signal-mask inheritance for the child;
+	// hl.exec_cmd has no documented analog as of 0.55, so we emit the same
+	// call but warn that the raw-spawn semantic isn't preserved.
+	execOnce  []string
+	execrOnce []string
+	exec      []string
 
 	// Pending hl.config sections. We buffer per top-level section (general,
 	// decoration, etc.) and build a small tree per section so nested keys
@@ -176,16 +181,33 @@ func (g *generator) preClassify(nodes []node) {
 }
 
 // stripCommentIndent removes any leading spaces or tabs from a comment line
-// without touching the sigil. Used when re-emitting a comment inside a Lua
-// table literal: the source's original indent is meaningless there (the
-// table's nesting depth dictates the indent), but the '#'/'--' sigil is
-// preserved per user preference.
+// without touching the sigil. Used when re-emitting a comment at a new
+// indent: the source's original indent doesn't apply at the new position.
 func stripCommentIndent(s string) string {
 	i := 0
 	for i < len(s) && (s[i] == ' ' || s[i] == '\t') {
 		i++
 	}
 	return s[i:]
+}
+
+// formatLuaComment normalizes a source comment line so it is valid Lua.
+// Hyprlang uses '#' for line comments; Lua uses '--'. The '#' character
+// is only valid as a comment sigil on the very first line of a chunk
+// (the shebang exception) — anywhere else, '#' is the length operator
+// and produces a syntax error. To keep emit sites trivial and consistent,
+// every comment passes through this single rewriter on the way out:
+// any leading whitespace is preserved verbatim, '#' is replaced with '--',
+// and anything else (notably already-'--' comments) is returned unchanged.
+func formatLuaComment(raw string) string {
+	i := 0
+	for i < len(raw) && (raw[i] == ' ' || raw[i] == '\t') {
+		i++
+	}
+	if i < len(raw) && raw[i] == '#' {
+		return raw[:i] + "--" + raw[i+1:]
+	}
+	return raw
 }
 
 func (g *generator) writeln(s string) {
@@ -265,15 +287,15 @@ func (g *generator) emit(n node) {
 		}
 		// In merge mode, comments arriving between sections are folded into
 		// the merged tree at the table-indent of the surrounding context.
-		// Outside merge mode they print at their source position verbatim.
-		// Either way the original sigil (#) is preserved per user request,
-		// even though '#' is not valid Lua syntax outside a shebang.
-		if g.appendMergedComment(stripCommentIndent(x.Text)) {
+		// Outside merge mode they print at their source position. Either
+		// way they go through formatLuaComment so '#' becomes '--' — '#'
+		// is only valid Lua syntax as a line-1 shebang.
+		if g.appendMergedComment(formatLuaComment(stripCommentIndent(x.Text))) {
 			g.passthrough()
 			return
 		}
 		g.flushConfig()
-		g.writeln(x.Text)
+		g.writeln(formatLuaComment(x.Text))
 		g.passthrough()
 	case Blank:
 		g.writeln("")
@@ -508,9 +530,10 @@ func emitConfTree(w *strings.Builder, t *confTree, depth int) {
 	indent := strings.Repeat("    ", depth)
 	for _, e := range t.entries {
 		if e.key == "" {
-			// e.comment already carries its source sigil ('#' or '--');
-			// the table's depth dictates the indent, not the source.
-			fmt.Fprintf(w, "%s%s\n", indent, e.comment)
+			// Comments inside a table are re-emitted at the table's indent
+			// (the source's leading whitespace is meaningless here) and run
+			// through formatLuaComment so the sigil is always Lua-valid.
+			fmt.Fprintf(w, "%s%s\n", indent, formatLuaComment(e.comment))
 			continue
 		}
 		child := t.children[e.key]
@@ -569,7 +592,7 @@ func (g *generator) emitSection(s Section) {
 		// Still emit a stub so users can see the body.
 		for _, child := range s.Body {
 			if c, ok := child.(Comment); ok {
-				g.writeln(stripCommentIndent(c.Text))
+				g.writeln(formatLuaComment(stripCommentIndent(c.Text)))
 			}
 		}
 	}
@@ -636,11 +659,7 @@ func (g *generator) emitDeviceSection(s Section) {
 			if g.stripComments {
 				continue
 			}
-			text := c.Text
-			if strings.HasPrefix(text, " ") {
-				text = text[1:]
-			}
-			g.writeln("    -- " + text)
+			g.writeln("    " + formatLuaComment(stripCommentIndent(c.Text)))
 		}
 	}
 	g.writeln("})")
@@ -662,7 +681,10 @@ func (g *generator) emitPluginSection(s Section) {
 		case KeyValue:
 			g.writef("  %s = %s", c.Key, c.Value)
 		case Comment:
-			g.writef("  # %s", c.Text)
+			// Body is already inside '--[[ ]]', so the sigil doesn't have
+			// to be Lua-syntactic. Run through formatLuaComment anyway so
+			// the output looks consistent and source '#' doesn't show up.
+			g.writeln("  " + formatLuaComment(stripCommentIndent(c.Text)))
 		}
 	}
 	g.writeln("]]")
@@ -670,9 +692,12 @@ func (g *generator) emitPluginSection(s Section) {
 }
 
 // flushExec emits a trailing hl.on("hyprland.start", ...) block for any
-// pending exec/exec-once directives.
+// pending exec/exec-once/execr-once directives, and an
+// hl.on("config.reloaded", ...) block for plain 'exec'. 'execr-once'
+// entries get a per-line TODO note in the start block since their raw-spawn
+// semantic (signal-mask isolation) has no documented Lua analog.
 func (g *generator) flushExec() {
-	if len(g.execOnce) == 0 && len(g.exec) == 0 {
+	if len(g.execOnce) == 0 && len(g.exec) == 0 && len(g.execrOnce) == 0 {
 		return
 	}
 	// Visually separate the closing event blocks from whatever the last
@@ -681,9 +706,13 @@ func (g *generator) flushExec() {
 	if g.out.Len() > 0 {
 		g.writeln("")
 	}
-	if len(g.execOnce) > 0 {
+	if len(g.execOnce) > 0 || len(g.execrOnce) > 0 {
 		g.writeln("hl.on(\"hyprland.start\", function()")
 		for _, cmd := range g.execOnce {
+			g.writeln("    " + formatExecCall(cmd))
+		}
+		for _, cmd := range g.execrOnce {
+			g.writeln("    -- TODO: manual review — was 'execr-once' (raw spawn / no signal-mask inherit); verify hl.exec_cmd is acceptable.")
 			g.writeln("    " + formatExecCall(cmd))
 		}
 		g.writeln("end)")

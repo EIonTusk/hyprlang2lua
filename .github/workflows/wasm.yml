@@ -13,7 +13,7 @@ name: wasm
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
     paths:
       - 'internal/converter/**'
       - 'web/wasm/**'
@@ -41,7 +41,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version-file: 'go.mod'
           cache: true
 
       - name: Build main.wasm

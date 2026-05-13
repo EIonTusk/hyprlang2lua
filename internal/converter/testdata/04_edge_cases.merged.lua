@@ -21,18 +21,18 @@ require("mocha")
 
 -- Top-level flattened syntax.
 
-hl.config({
-    general = {
-        gaps_in = 7,
-    },
-})
-
--- Gesture.
 hl.gesture({
     fingers = 3,
     direction = "horizontal",
     action = "workspace",
 })
 
--- Permissions.
 hl.permission({ binary = "/usr/(bin|local/bin)/grim", type = "screencopy", allow = "allow" })
+hl.config({
+    general = {
+        gaps_in = 7,
+    },
+    -- Gesture.
+    -- Permissions.
+})
+

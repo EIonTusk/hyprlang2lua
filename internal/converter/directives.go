@@ -54,9 +54,11 @@ func (g *generator) emitDirective(d Directive) {
 	case d.Name == "exec", d.Name == "exec-once", d.Name == "execr-once":
 		g.emitExec(d)
 	case d.Name == "exec-shutdown":
-		// Closest event is hyprland.shutdown.
+		// Closest event is hyprland.shutdown. Route through formatExecCall
+		// so '$var' references resolve to locals and '[RULES] cmd' prefixes
+		// get lifted into the hl.exec_cmd rules table, just like exec/exec-once.
 		g.writeln("hl.on(\"hyprland.shutdown\", function()")
-		g.writef("    hl.exec_cmd(%s)", quoteLuaString(d.Value))
+		g.writeln("    " + formatExecCall(d.Value))
 		g.writeln("end)")
 		g.writeln("")
 		g.translated(1)
@@ -124,7 +126,11 @@ func splitCommas(s string) []string {
 // emitBind translates bind[mlertnopcd] = MOD, KEY, DISPATCHER, ARGS...
 //
 // Flag-derived options:
-//   bindm — { mouse = true }
+//   bindm — mouse-button bind. The Lua API has no 'mouse' bind option (see
+//           HL.BindOptions in hl.meta.lua); the key string itself encodes
+//           the mouse button (e.g. "SUPER + mouse:272") and the dispatcher
+//           (movewindow → hl.dsp.window.drag) carries the semantic. No
+//           option field is emitted.
 //   binde — { repeating = true }
 //   bindl — { locked = true }
 //   bindr — { release = true }
@@ -144,7 +150,8 @@ func (g *generator) emitBind(d Directive) {
 	for i := 0; i < len(suffix); i++ {
 		switch suffix[i] {
 		case 'm':
-			opts["mouse"] = "true"
+			// No-op: 'mouse' is not a HL.BindOptions field; the key string
+			// and dispatcher already convey mouse-button semantics.
 		case 'e':
 			opts["repeating"] = "true"
 		case 'l':
@@ -208,7 +215,7 @@ func formatBindOpts(opts map[string]string) string {
 		return ""
 	}
 	// Stable order so output is deterministic.
-	order := []string{"mouse", "locked", "release", "repeating", "non_consuming", "transparent", "ignore_mods", "long_press", "click", "drag"}
+	order := []string{"locked", "release", "repeating", "non_consuming", "transparent", "ignore_mods", "long_press", "click", "drag"}
 	parts := []string{}
 	for _, k := range order {
 		if v, ok := opts[k]; ok {
@@ -345,9 +352,13 @@ func (g *generator) emitExec(d Directive) {
 	if cmd == "" {
 		return
 	}
-	if d.Name == "exec" {
+	switch d.Name {
+	case "exec":
 		g.exec = append(g.exec, cmd)
-	} else {
+	case "execr-once":
+		g.execrOnce = append(g.execrOnce, cmd)
+		g.flag(d.line, "execr-once: raw-spawn semantic not preserved (hl.exec_cmd has no analog)")
+	default: // exec-once
 		g.execOnce = append(g.execOnce, cmd)
 	}
 	g.translated(1)
@@ -443,7 +454,7 @@ func (g *generator) emitMonitorV2Block(s Section) {
 	for _, child := range s.Body {
 		if cmt, ok := child.(Comment); ok {
 			if !g.stripComments {
-				fieldLines = append(fieldLines, "    "+stripCommentIndent(cmt.Text))
+				fieldLines = append(fieldLines, "    "+formatLuaComment(stripCommentIndent(cmt.Text)))
 			}
 			continue
 		}
@@ -576,7 +587,7 @@ func (g *generator) emitWindowRuleBlock(s Section) {
 	for _, child := range s.Body {
 		if cmt, ok := child.(Comment); ok {
 			if !g.stripComments {
-				actionLines = append(actionLines, "    "+stripCommentIndent(cmt.Text))
+				actionLines = append(actionLines, "    "+formatLuaComment(stripCommentIndent(cmt.Text)))
 			}
 			continue
 		}
@@ -643,7 +654,7 @@ func (g *generator) emitWorkspaceBlock(s Section) {
 	for _, child := range s.Body {
 		if cmt, ok := child.(Comment); ok {
 			if !g.stripComments {
-				fieldLines = append(fieldLines, "    "+stripCommentIndent(cmt.Text))
+				fieldLines = append(fieldLines, "    "+formatLuaComment(stripCommentIndent(cmt.Text)))
 			}
 			continue
 		}
@@ -704,7 +715,7 @@ func (g *generator) emitLayerRuleBlock(s Section) {
 	for _, child := range s.Body {
 		if cmt, ok := child.(Comment); ok {
 			if !g.stripComments {
-				fieldLines = append(fieldLines, "    "+stripCommentIndent(cmt.Text))
+				fieldLines = append(fieldLines, "    "+formatLuaComment(stripCommentIndent(cmt.Text)))
 			}
 			continue
 		}
@@ -920,6 +931,8 @@ func classifyWindowRuleField(field string, v2, firstField bool) (string, string,
 		"tag": true, "xwayland": true, "floating": true, "fullscreen": true,
 		"pinned": true, "focus": true, "workspace": true, "onworkspace": true,
 		"fullscreenstate": true, "pid": true,
+		// per HL.WindowQueryFilter in hl.meta.lua
+		"monitor": true, "mapped": true,
 	}
 	if i := strings.IndexByte(field, ':'); i > 0 {
 		k := strings.ToLower(strings.TrimSpace(field[:i]))
@@ -1131,18 +1144,57 @@ func (g *generator) emitSource(d Directive) {
 	g.translated(1)
 }
 
-// moduleNameFor turns 'colors.conf' or '~/.config/hypr/mocha.conf' into a
-// Lua module name. We keep only the basename, drop the .conf, and replace
-// anything weird with '_'.
+// moduleNameFor turns a hyprlang 'source =' path into a Lua module name
+// suitable for require(). Lua's package.path resolves dotted names against
+// the same directory tree as filesystem paths ('themes.dark' → 'themes/dark.lua'),
+// so we map slashes to dots rather than throwing them away.
+//
+// Examples:
+//   colors.conf               -> "colors"
+//   themes/dark.conf          -> "themes.dark"
+//   ~/.config/hypr/mocha.conf -> "mocha"   (absolute paths reduce to basename
+//                                            because '~' / '.config' / '.' are
+//                                            outside the user's package.path)
+//
+// Absolute paths (starting with '/' or '~') reduce to just their basename:
+// the directory tree above an absolute root is meaningless to package.path.
+// Same goes for the './' prefix — Lua's require uses package.path lookup
+// rather than relative-from-cwd file resolution, so the dot is dropped.
+// Anything else (a relative path) is preserved with '/' → '.'.
 func moduleNameFor(path string) string {
-	// Basename.
-	if i := strings.LastIndexAny(path, "/\\"); i >= 0 {
-		path = path[i+1:]
+	path = strings.TrimSpace(path)
+	if strings.HasPrefix(path, "/") || strings.HasPrefix(path, "~") {
+		if i := strings.LastIndexAny(path, "/\\"); i >= 0 {
+			path = path[i+1:]
+		}
+	} else {
+		path = strings.TrimPrefix(path, "./")
+		path = strings.ReplaceAll(path, "\\", "/")
 	}
 	path = strings.TrimSuffix(path, ".conf")
 	path = strings.TrimSuffix(path, ".lua")
+	// Split on '/' so each component can be sanitized independently; then
+	// re-join with '.' to form the Lua-style module name.
+	parts := strings.Split(path, "/")
+	clean := parts[:0]
+	for _, p := range parts {
+		if p == "" {
+			continue
+		}
+		clean = append(clean, sanitizeModuleComponent(p))
+	}
+	if len(clean) == 0 {
+		return "sourced_file"
+	}
+	return strings.Join(clean, ".")
+}
+
+// sanitizeModuleComponent maps one path component to a Lua-safe identifier:
+// alphanumerics, '_' and '-' survive; anything else becomes '_'; a leading
+// digit is prefixed with '_'.
+func sanitizeModuleComponent(s string) string {
 	var b strings.Builder
-	for i, r := range path {
+	for i, r := range s {
 		if i == 0 && r >= '0' && r <= '9' {
 			b.WriteByte('_')
 		}
@@ -1154,7 +1206,7 @@ func moduleNameFor(path string) string {
 		}
 	}
 	if b.Len() == 0 {
-		return "sourced_file"
+		return "_"
 	}
 	return b.String()
 }
