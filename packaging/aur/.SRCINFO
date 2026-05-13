@@ -10,6 +10,6 @@ pkgbase = hyprlang2lua
 	makedepends = go
 	depends = glibc
 	source = hyprlang2lua-0.1.0.tar.gz::https://github.com/EIonTusk/hyprlang2lua/archive/v0.1.0.tar.gz
-	sha256sums = 980cd6fb20f229c9a805c8bbc0d80c781a2986bde29cfc4d7ea8aa5d88fe4fc0
+	sha256sums = 5d7bffb35813e251f97bec30d9ab4a8a74e6a03407612e41891632fa711dc986
 
 pkgname = hyprlang2lua
