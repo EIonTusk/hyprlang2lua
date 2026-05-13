@@ -142,6 +142,19 @@ Then open `http://localhost:8080/`. The wasm module exposes a single global,
 `window.hyprlang2lua.convert(src)`, returning `{ lua, translated, passthrough,
 flagged, coverage, notes, error }`.
 
+### Deploy
+
+The browser build is deployed to GitHub Pages by `.github/workflows/pages.yml`
+on every push to `main`/`master` that touches the converter, `web/`, or the
+module graph. The workflow builds `main.wasm` from source, stages the static
+assets into `site/`, and hands them to `actions/deploy-pages@v4`.
+
+One-time repo configuration: **Settings → Pages → Build and deployment →
+Source** must be set to **"GitHub Actions"** (not "Deploy from a branch").
+Without that, the deploy step fails with a 404. Trigger manually via the
+**Actions** tab → *pages* → *Run workflow* if a redeploy is needed without
+a code change.
+
 ## Tests
 
 ```sh

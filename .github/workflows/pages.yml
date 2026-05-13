@@ -1,8 +1,24 @@
 name: pages
 
+# Deploys the in-browser converter at web/ to GitHub Pages. The wasm payload
+# is rebuilt from internal/converter on every push so the deployed site can
+# never drift from source.
+#
+# One-time repo setting: Settings → Pages → "Build and deployment" → Source
+# must be "GitHub Actions" (not "Deploy from a branch"). Without that, the
+# deploy step in this workflow fails with a 404.
+
 on:
   push:
     branches: [main, master]
+    paths:
+      - 'internal/converter/**'
+      - 'web/**'
+      - 'cmd/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -22,13 +38,21 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
-      - name: build wasm
+      - name: build site
         run: |
           mkdir -p site
           cp web/index.html web/main.js site/
           cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" site/
           GOOS=js GOARCH=wasm go build -trimpath -ldflags='-s -w' -o site/main.wasm ./web/wasm
           ls -lh site/
+      - name: verify required artifacts
+        # Belt-and-braces: catch a missing file before it surfaces as a 404
+        # in the deployed site. Adding/removing assets in web/ should be
+        # accompanied by an update here.
+        run: |
+          for f in index.html main.js wasm_exec.js main.wasm; do
+            test -s "site/$f" || { echo "missing site/$f"; exit 1; }
+          done
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
