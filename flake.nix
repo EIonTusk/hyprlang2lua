@@ -26,11 +26,11 @@
 
           src = self;
 
-          # First-time bootstrap: replace lib.fakeHash with the actual hash
-          # Nix prints on the first build attempt. The hash only changes
-          # when go.mod or go.sum changes — adding/removing a dependency or
-          # bumping a version. Refresh it then; otherwise it stays put.
-          vendorHash = pkgs.lib.fakeHash;
+          # Hash of the vendored Go module cache. Only changes when go.mod
+          # or go.sum changes (a dependency added/removed/bumped). If Nix
+          # complains about a mismatch after one of those edits, replace
+          # this string with the `got: sha256-…` value it prints.
+          vendorHash = "sha256-Z8V1a3uJdG/lj6AP4Xly01MQSq/yBnB2/TuERrrj0o0=";
 
           subPackages = [ "cmd/hyprlang2lua" ];
 
