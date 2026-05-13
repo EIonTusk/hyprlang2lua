@@ -1,0 +1,44 @@
+name: pages
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+      - name: build wasm
+        run: |
+          mkdir -p site
+          cp web/index.html web/main.js site/
+          cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" site/
+          GOOS=js GOARCH=wasm go build -trimpath -ldflags='-s -w' -o site/main.wasm ./web/wasm
+          ls -lh site/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

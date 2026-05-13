@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>hyprlang2lua — Hyprland config converter</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root {
+    --bg: #1a1b26;
+    --bg-elev: #1f2335;
+    --fg: #c0caf5;
+    --fg-dim: #a9b1d6;
+    --muted: #565f89;
+    --accent: #7aa2f7;
+    --accent-2: #bb9af7;
+    --warn: #e0af68;
+    --bad: #f7768e;
+    --ok: #9ece6a;
+    --panel: #24283b;
+    --border: #2f344e;
+    --border-strong: #414868;
+
+    --diff-add-mark: var(--ok);
+    --diff-del-mark: var(--bad);
+    --diff-ctx-mark: var(--muted);
+
+    /* left-right split ratio — driven by the draggable divider */
+    --split: 1fr;
+
+    /* monospace metrics — kept as variables so the gutter and textarea
+       agree on line height to the pixel. */
+    --mono-size: 13px;
+    --mono-lh: 20px;
+
+    --gutter-w: 48px;
+    --radius: 6px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--bg); color: var(--fg);
+    display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ===== Header ============================================== */
+  header {
+    padding: 11px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elev);
+    display: flex; align-items: center; gap: 14px;
+  }
+  .brand {
+    display: flex; align-items: center; gap: 10px;
+    text-decoration: none; color: inherit;
+  }
+  .brand .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow: 0 0 10px rgba(122,162,247,.55);
+    flex-shrink: 0;
+  }
+  .brand h1 {
+    margin: 0; font-size: 15px; font-weight: 600;
+    letter-spacing: -.01em;
+  }
+  .brand h1 .sep { color: var(--muted); margin: 0 5px; font-weight: 400; }
+  .brand h1 .out { color: var(--accent); }
+  .brand .tag {
+    color: var(--muted); font-size: 12px;
+    border-left: 1px solid var(--border-strong);
+    padding-left: 12px; margin-left: 4px;
+  }
+  header .spacer { flex: 1; }
+  header .actions { display: flex; gap: 8px; align-items: center; }
+
+  /* ===== Buttons ============================================= */
+  button {
+    background: transparent; color: var(--fg);
+    border: 1px solid var(--border-strong); border-radius: var(--radius);
+    padding: 0 12px; height: 32px;
+    font: inherit; font-size: 13px; font-weight: 500;
+    cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+    transition: background .12s, border-color .12s, color .12s;
+    white-space: nowrap;
+  }
+  button:hover { background: var(--panel); border-color: var(--muted); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button:disabled:hover { background: transparent; border-color: var(--border-strong); }
+  button.primary {
+    background: var(--accent); color: #1a1b26;
+    border-color: var(--accent); font-weight: 600;
+  }
+  button.primary:hover { background: #8ab3ff; border-color: #8ab3ff; }
+  button.icon-only { width: 32px; padding: 0; justify-content: center; }
+  button.compact { height: 26px; padding: 0 10px; font-size: 12px; border-radius: 5px; }
+  button.compact.icon-only { width: 26px; padding: 0; }
+  button svg { flex-shrink: 0; }
+
+  /* settings popover */
+  details.settings { position: relative; }
+  details.settings > summary {
+    list-style: none; cursor: pointer;
+    background: transparent; color: var(--fg);
+    border: 1px solid var(--border-strong); border-radius: var(--radius);
+    width: 32px; height: 32px;
+    display: inline-flex; align-items: center; justify-content: center;
+    transition: background .12s;
+  }
+  details.settings > summary::-webkit-details-marker { display: none; }
+  details.settings > summary:hover,
+  details.settings[open] > summary { background: var(--panel); }
+  details.settings .panel {
+    position: absolute; right: 0; top: calc(100% + 6px);
+    background: var(--panel); border: 1px solid var(--border-strong);
+    border-radius: 8px; padding: 14px;
+    min-width: 300px; z-index: 50;
+    box-shadow: 0 10px 30px rgba(0,0,0,.5);
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  details.settings .panel h3 {
+    margin: 0; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted);
+  }
+  label.opt {
+    display: flex; align-items: flex-start; gap: 10px;
+    color: var(--fg); font-size: 13px;
+    user-select: none; cursor: pointer;
+    padding: 2px 0;
+  }
+  label.opt input { accent-color: var(--accent); margin-top: 3px; }
+  label.opt .hint {
+    display: block; color: var(--muted);
+    font-size: 12px; line-height: 1.4; margin-top: 2px;
+  }
+
+  a.icn-link {
+    color: var(--muted); text-decoration: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: var(--radius);
+    transition: background .12s, color .12s;
+  }
+  a.icn-link:hover { background: var(--panel); color: var(--fg); }
+
+  /* ===== Main split ========================================== */
+  main {
+    flex: 1; min-height: 0;
+    display: grid;
+    grid-template-columns: var(--split) 6px 1fr;
+  }
+  .pane { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .pane-head {
+    padding: 7px 12px 7px 14px;
+    background: var(--bg-elev);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+    min-height: 40px;
+  }
+  .pane-head .title {
+    font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .06em;
+    color: var(--fg-dim);
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .pane-head .title svg { color: var(--muted); }
+  .pane-head .grow { flex: 1; }
+  .pane-head .tools { display: inline-flex; gap: 6px; }
+
+  /* divider */
+  .divider {
+    cursor: col-resize;
+    background: var(--border);
+    position: relative;
+    transition: background .15s;
+  }
+  .divider:hover, .divider.dragging { background: var(--accent); }
+  .divider::after {
+    content: ""; position: absolute;
+    left: -4px; right: -4px; top: 0; bottom: 0;
+  }
+
+  /* ===== Editor + gutter ===================================== */
+  .editor {
+    flex: 1; position: relative; min-height: 0;
+    display: flex;
+    background: var(--bg);
+  }
+  .gutter {
+    width: var(--gutter-w); flex-shrink: 0;
+    background: var(--bg-elev);
+    border-right: 1px solid var(--border);
+    overflow: hidden;
+    position: relative;
+    user-select: none;
+  }
+  .gutter .lines {
+    position: absolute; left: 0; right: 0; top: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    line-height: var(--mono-lh);
+    padding: 12px 0;
+    color: var(--muted);
+  }
+  .gutter .ln {
+    height: var(--mono-lh);
+    padding-right: 8px;
+    text-align: right;
+    border-left: 3px solid transparent;
+    box-sizing: border-box;
+    font-variant-numeric: tabular-nums;
+  }
+  .gutter .ln.translated  { border-color: var(--diff-add-mark); }
+  .gutter .ln.flagged     { border-color: var(--diff-del-mark); color: var(--bad); }
+  .gutter .ln.passthrough { border-color: var(--diff-ctx-mark); }
+
+  textarea, pre {
+    flex: 1; margin: 0; padding: 12px 14px;
+    background: transparent; color: var(--fg);
+    border: 0; outline: none;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: var(--mono-size); line-height: var(--mono-lh);
+    resize: none; overflow: auto;
+    white-space: pre;
+  }
+  textarea { tab-size: 4; }
+  textarea::placeholder { color: var(--muted); }
+
+  /* ===== Output / input empty state ========================== */
+  .out-empty {
+    flex: 1; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 40px 24px;
+    color: var(--muted);
+  }
+  .in-empty {
+    position: absolute;
+    top: 0; right: 0; bottom: 0;
+    left: var(--gutter-w);
+    display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 40px 24px;
+    color: var(--muted);
+    background: var(--bg);
+    pointer-events: none;
+  }
+  .in-empty[hidden] { display: none; }
+  .in-empty .stack { pointer-events: none; }
+  .in-empty button { pointer-events: auto; }
+  .out-empty .stack, .in-empty .stack { max-width: 320px; }
+  .out-empty .icon, .in-empty .icon {
+    width: 48px; height: 48px; margin: 0 auto 16px;
+    border-radius: 50%;
+    background: var(--panel);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--muted);
+  }
+  .out-empty.busy .icon { color: var(--warn); }
+  .out-empty.busy .icon svg { animation: spin 1.4s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .out-empty.error .icon {
+    background: rgba(247,118,142,.12);
+    color: var(--bad);
+  }
+  .out-empty h3, .in-empty h3 {
+    margin: 0 0 6px; color: var(--fg-dim);
+    font-size: 14px; font-weight: 600;
+  }
+  .out-empty p, .in-empty p {
+    margin: 0 0 16px; font-size: 13px; line-height: 1.5;
+    color: var(--muted);
+  }
+  .out-empty button, .in-empty button { font-size: 12px; }
+
+  /* ===== Stats footer ======================================== */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 12px 20px;
+    background: var(--bg-elev);
+    display: flex; align-items: center; gap: 22px;
+    flex-wrap: wrap;
+  }
+  .cov {
+    display: flex; align-items: center; gap: 12px;
+    flex: 1 1 280px; min-width: 240px; max-width: 480px;
+  }
+  .cov .label {
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .cov .bar {
+    flex: 1; height: 8px; border-radius: 4px;
+    background: var(--panel);
+    overflow: hidden; display: flex;
+    box-shadow: inset 0 0 0 1px var(--border);
+  }
+  .cov .bar > span { height: 100%; transition: width .25s ease; }
+  .cov .bar .seg-ok { background: var(--ok); }
+  .cov .bar .seg-pt { background: var(--muted); }
+  .cov .bar .seg-fl { background: var(--bad); }
+  .cov .pct {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600; color: var(--fg);
+    min-width: 52px; text-align: right;
+    font-size: 13px;
+  }
+  footer .divider-dot {
+    width: 4px; height: 4px; border-radius: 50%;
+    background: var(--border-strong);
+    flex-shrink: 0;
+  }
+  .stat-group { display: inline-flex; gap: 18px; flex-wrap: wrap; }
+  footer .stat {
+    font-size: 13px; color: var(--fg-dim);
+    display: inline-flex; align-items: center; gap: 7px;
+    font-variant-numeric: tabular-nums;
+  }
+  footer .stat .pill {
+    width: 8px; height: 8px; border-radius: 2px;
+    flex-shrink: 0;
+  }
+  footer .stat.ok          .pill { background: var(--ok); }
+  footer .stat.passthrough .pill { background: var(--muted); }
+  footer .stat.flagged     .pill { background: var(--bad); }
+  footer .stat strong { color: var(--fg); font-weight: 600; }
+
+  /* ===== Notes =============================================== */
+  .notes-wrap {
+    border-top: 1px solid var(--border);
+    background: var(--bg-elev);
+    max-height: 200px; overflow: auto;
+  }
+  .notes-wrap:empty { display: none; }
+  .notes-head {
+    padding: 8px 20px;
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .08em;
+    color: var(--muted);
+    position: sticky; top: 0;
+    background: var(--bg-elev);
+    border-bottom: 1px solid var(--border);
+    z-index: 1;
+  }
+  .notes-head .hint {
+    font-weight: 500; text-transform: none; letter-spacing: 0;
+    margin-left: 8px; color: var(--muted);
+  }
+  .note {
+    padding: 8px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex; gap: 12px; align-items: flex-start;
+    cursor: pointer; font-size: 13px;
+    transition: background .1s;
+  }
+  .note:last-child { border-bottom: none; }
+  .note:hover, .note:focus-visible {
+    background: var(--panel); outline: none;
+  }
+  .note .ln-badge {
+    flex-shrink: 0;
+    background: var(--panel);
+    color: var(--muted);
+    border: 1px solid var(--border-strong);
+    border-radius: 4px;
+    padding: 2px 8px;
+    font-family: ui-monospace, monospace;
+    font-size: 11px; font-weight: 600;
+    min-width: 60px; text-align: center;
+    line-height: 1.3;
+  }
+  .note .text {
+    color: var(--fg-dim); line-height: 1.5;
+    word-break: break-word;
+  }
+
+  /* ===== Error banner ======================================== */
+  .error-banner {
+    background: rgba(247,118,142,.10);
+    border-top: 1px solid var(--bad);
+    color: var(--bad);
+    padding: 10px 20px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px;
+    display: none;
+  }
+  .error-banner.show { display: block; }
+
+  /* ===== Drop overlay ======================================== */
+  .drop-overlay {
+    position: fixed; inset: 12px;
+    background: rgba(122,162,247,.08);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    border: 2px dashed var(--accent);
+    border-radius: 12px;
+    display: none; align-items: center; justify-content: center;
+    pointer-events: none;
+    z-index: 99;
+  }
+  .drop-overlay .card {
+    background: var(--panel);
+    border: 1px solid var(--accent);
+    border-radius: 12px;
+    padding: 28px 36px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.6);
+    text-align: center;
+  }
+  .drop-overlay .card .icn {
+    width: 44px; height: 44px; margin: 0 auto 12px;
+    color: var(--accent);
+  }
+  .drop-overlay .card h2 {
+    margin: 0 0 4px; font-size: 17px; font-weight: 600;
+  }
+  .drop-overlay .card p {
+    margin: 0; color: var(--muted); font-size: 13px;
+  }
+  body.dragging-file .drop-overlay { display: flex; }
+  body.dragging-divider { cursor: col-resize; user-select: none; }
+
+  /* ===== Toast =============================================== */
+  .toast {
+    position: fixed; bottom: 28px; left: 50%;
+    transform: translateX(-50%) translateY(14px);
+    background: var(--panel);
+    color: var(--fg);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-size: 13px;
+    box-shadow: 0 14px 30px rgba(0,0,0,.5);
+    opacity: 0;
+    transition: opacity .18s ease, transform .18s ease;
+    pointer-events: none;
+    z-index: 100;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  .toast .icn { color: var(--ok); flex-shrink: 0; }
+
+  /* ===== Links =============================================== */
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ===== Responsive ========================================== */
+  @media (max-width: 720px) {
+    header { padding: 10px 14px; gap: 8px; flex-wrap: wrap; }
+    .brand .tag { display: none; }
+    main {
+      grid-template-columns: 1fr;
+      grid-template-rows: 1fr 6px 1fr;
+    }
+    .divider { cursor: row-resize; }
+    footer { padding: 10px 14px; gap: 14px; }
+    .cov { flex-basis: 100%; max-width: none; }
+    :root { --gutter-w: 36px; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand" aria-label="hyprlang2lua">
+    <span class="dot" aria-hidden="true"></span>
+    <h1>hyprlang<span class="sep">→</span><span class="out">lua</span></h1>
+    <span class="tag">hyprland 0.55 config converter</span>
+  </div>
+  <span class="spacer"></span>
+  <span class="actions">
+    <a class="icn-link" href="https://github.com/EIonTusk/hyprlang2lua" target="_blank" rel="noopener" title="View on GitHub" aria-label="GitHub">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.92.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.87-1.54-3.87-1.54-.52-1.33-1.28-1.69-1.28-1.69-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.03 1.76 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.18-3.09-.12-.29-.51-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11 11 0 0 1 5.79 0c2.21-1.49 3.18-1.18 3.18-1.18.62 1.59.23 2.76.11 3.05.74.81 1.18 1.83 1.18 3.09 0 4.42-2.7 5.39-5.27 5.68.41.36.78 1.06.78 2.14 0 1.54-.01 2.79-.01 3.17 0 .31.21.68.8.56C20.21 21.39 23.5 17.08 23.5 12 23.5 5.65 18.35.5 12 .5z"/></svg>
+    </a>
+    <details class="settings" id="settings">
+      <summary title="Output options" aria-label="Output options">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      </summary>
+      <div class="panel">
+        <h3>output options</h3>
+        <label class="opt">
+          <input type="checkbox" id="merge-config" checked>
+          <span>merge into one if possible
+            <span class="hint">Collapse every hl.X(...) call into a single one where the API supports it. In practice this folds all per-section hl.config({...}) calls into one merged call (comments between sections move inside). Other hl.* APIs take one spec per call and pass through unchanged.</span>
+          </span>
+        </label>
+        <label class="opt">
+          <input type="checkbox" id="strip-comments">
+          <span>strip comments
+            <span class="hint">Drop hyprlang comments from the output. TODO markers from flagged directives are kept.</span>
+          </span>
+        </label>
+        <label class="opt">
+          <input type="checkbox" id="hoist-variables">
+          <span>hoist variables to the top
+            <span class="hint">Collect every '$var = …' rewrite into a single block right after the header so all references resolve regardless of where they sit in the file.</span>
+          </span>
+        </label>
+      </div>
+    </details>
+  </span>
+</header>
+
+<main>
+  <div class="pane">
+    <div class="pane-head">
+      <span class="title">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        hyprland.conf
+      </span>
+      <span class="grow"></span>
+      <span class="tools">
+        <button id="sample-btn" class="compact" type="button" title="Load a sample hyprland.conf">Sample</button>
+        <button id="clear-btn" class="compact" type="button" title="Clear input" disabled>Clear</button>
+      </span>
+    </div>
+    <div class="editor">
+      <div class="gutter" id="gutter" aria-hidden="true"><div class="lines" id="gutter-lines"></div></div>
+      <textarea id="input" spellcheck="false" placeholder="# Drop a hyprland.conf, paste here, or click Sample to start."></textarea>
+      <div class="in-empty" id="in-empty">
+        <div class="stack">
+          <div class="icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          </div>
+          <h3>Bring in a hyprland.conf</h3>
+          <p>Drop a file, paste here, load the sample, or pick one from disk.</p>
+          <button id="upload-btn" class="primary" type="button">Upload file</button>
+        </div>
+      </div>
+      <input id="file-input" type="file" accept=".conf,.txt,text/plain" hidden>
+    </div>
+  </div>
+
+  <div class="divider" id="divider" role="separator" aria-orientation="vertical" aria-label="Resize panes"></div>
+
+  <div class="pane">
+    <div class="pane-head">
+      <span class="title">
+        <svg class="lua-mark" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="M21.953 11.997a9.94 9.94 0 1 1-19.879 0 9.94 9.94 0 0 1 19.879 0zM18.84 7.43a1.85 1.85 0 1 1-3.7 0 1.85 1.85 0 0 1 3.7 0z"/></svg>
+        hyprland.lua
+      </span>
+      <span class="grow"></span>
+      <span class="tools">
+        <button id="copy-btn" class="compact" type="button" title="Copy output to clipboard" disabled>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy
+        </button>
+        <button id="download-btn" class="compact" type="button" title="Download hyprland.lua (Ctrl+S)" disabled>
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Download
+        </button>
+      </span>
+    </div>
+    <div class="editor">
+      <div class="gutter" id="out-gutter" aria-hidden="true"><div class="lines" id="out-gutter-lines"></div></div>
+      <pre id="output" hidden></pre>
+      <div class="out-empty" id="out-empty">
+        <div class="stack">
+          <div class="icon" id="empty-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          </div>
+          <h3 id="empty-title">Loading converter…</h3>
+          <p id="empty-help">The Hyprland-to-Lua converter is starting up.</p>
+          <button id="empty-sample" class="primary" type="button" hidden>Try a sample config</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div class="error-banner" id="error-banner" role="alert"></div>
+
+<footer>
+  <span class="cov">
+    <span class="label">coverage</span>
+    <span class="bar" role="img" aria-label="conversion coverage">
+      <span class="seg-ok" id="cov-seg-ok" style="width:0%"></span>
+      <span class="seg-fl" id="cov-seg-fl" style="width:0%"></span>
+    </span>
+    <span class="pct" id="cov-pct">—</span>
+  </span>
+  <span class="divider-dot" aria-hidden="true"></span>
+  <span class="stat-group">
+    <span class="stat ok"><span class="pill"></span><strong id="stat-trans">0</strong>&nbsp;translated</span>
+    <span class="stat passthrough"><span class="pill"></span><strong id="stat-pass">0</strong>&nbsp;passthrough</span>
+    <span class="stat flagged"><span class="pill"></span><strong id="stat-flag">0</strong>&nbsp;flagged</span>
+  </span>
+</footer>
+
+<div class="notes-wrap" id="notes-wrap"></div>
+
+<div class="drop-overlay">
+  <div class="card">
+    <div class="icn">
+      <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    </div>
+    <h2>Drop your hyprland.conf</h2>
+    <p>Convert it to a Hyprland 0.55 hyprland.lua</p>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite">
+  <svg class="icn" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>
+  <span id="toast-text">Copied</span>
+</div>
+
+<script src="wasm_exec.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
