@@ -3,6 +3,9 @@
 Convert legacy [Hyprland](https://hypr.land) `hyprland.conf` (hyprlang) files
 to the Lua configuration format introduced in Hyprland 0.55 (May 2026).
 
+**Try it online:** <https://eiontusk.github.io/hyprlang2lua/> — runs entirely
+in your browser, no input ever leaves the page.
+
 The converter is built around a hand-written lexer + recursive-descent parser
 and a per-directive code generator. The output is idiomatic Lua that matches
 the shape of the example config shipped at `/usr/share/hypr/hyprland.lua`,
