@@ -11,6 +11,27 @@ at `/usr/share/hypr/stubs/hl.meta.lua`.
 
 ## Install
 
+### Arch Linux (AUR)
+
+```sh
+paru -S hyprlang2lua          # or: yay -S hyprlang2lua
+```
+
+The PKGBUILD source lives at `packaging/aur/PKGBUILD`; release notes for
+maintainers are in [`packaging/aur/MAINTAINING.md`](packaging/aur/MAINTAINING.md).
+
+### Nix (flake)
+
+```sh
+nix run github:EIonTusk/hyprlang2lua -- input.conf > output.lua
+nix profile install github:EIonTusk/hyprlang2lua    # persistent install
+```
+
+`nix develop` opens a dev shell with the Go toolchain, `gopls`, and `lua`
+(used by the optional `luac -p` gate in the golden tests).
+
+### Go (source)
+
 ```sh
 go install github.com/EIonTusk/hyprlang2lua/cmd/hyprlang2lua@latest
 ```

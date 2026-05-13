@@ -1,0 +1,9 @@
+# nix build outputs — `nix build` symlinks `result`, `nix build .#foo` symlinks `result-foo`
+result
+result-*
+
+# AUR build artifacts left behind by makepkg
+packaging/aur/src/
+packaging/aur/pkg/
+packaging/aur/*.pkg.tar.zst
+packaging/aur/*.tar.gz
