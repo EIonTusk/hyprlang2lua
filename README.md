@@ -80,7 +80,7 @@ Flags:
 | `-o, --out FILE`          | write to FILE (single-file mode; default stdout)                    |
 | `-r, --report`            | print `translated / passthrough / flagged / coverage%` to stderr    |
 | `-c, --check`             | exit code `3` if any directive was flagged for manual review        |
-| `-m, --merge`             | merge every `hl.X(...)` call into a single one if the API supports it (default **on**; pass `--merge=false` to disable). In practice this folds every per-section `hl.config({...})` into one call — section-separating comments are preserved inside the merged table. Other `hl.*` APIs (bind, window_rule, monitor, env, device, …) take one spec per call by design and pass through unchanged. `--merge-config` is kept as a deprecated alias. |
+| `    --no-merge`          | emit a separate `hl.X(...)` call per source line instead of merging mergeable APIs into one call. Merging is on by default and currently applies to `hl.config` — in practice it folds every per-section `hl.config({...})` into one call, with section-separating comments preserved inside the merged table. Other `hl.*` APIs (bind, window_rule, monitor, env, device, …) take one spec per call by design and pass through unchanged. |
 | `-s, --strip-comments`    | drop comments from the output (`-- TODO: manual review` markers from flagged directives are kept) |
 
 With no positional argument, the CLI reads from stdin — unless stdin is a

@@ -26,7 +26,7 @@ func main() {
 		report    bool
 		check     bool
 		inplace   bool
-		merge     bool
+		noMerge   bool
 		strip     bool
 		hoistVars bool
 		outPath   string
@@ -36,11 +36,7 @@ func main() {
 	fs.BoolVarP(&report, "report", "r", false, "print a coverage report to stderr after conversion")
 	fs.BoolVarP(&check, "check", "c", false, "exit non-zero if any line was flagged for manual review (use in CI)")
 	fs.BoolVar(&inplace, "in-place", false, "with --dir, overwrite existing .lua siblings")
-	fs.BoolVarP(&merge, "merge", "m", true, "merge every hl.X(...) call into a single one if the API supports it (currently: hl.config; other hl.* take one spec per call). Pass --merge=false to disable")
-	// Back-compat: the original flag name was --merge-config. Keep it as a
-	// deprecated alias so existing scripts and CI invocations don't break.
-	fs.BoolVar(&merge, "merge-config", true, "alias for --merge")
-	_ = fs.MarkDeprecated("merge-config", "use --merge instead")
+	fs.BoolVar(&noMerge, "no-merge", false, "emit a separate hl.X(...) call per source line instead of merging mergeable APIs (currently hl.config) into one call")
 	fs.BoolVarP(&strip, "strip-comments", "s", false, "drop comments from the output (TODO markers from flagged directives are kept)")
 	fs.BoolVar(&hoistVars, "hoist-vars", false, "move every '$var = ...' rewrite into a single block at the top of the output")
 	fs.StringVarP(&outPath, "out", "o", "", "write output to `FILE` instead of stdout (single-file mode)")
@@ -61,7 +57,7 @@ flags:
 		os.Exit(2)
 	}
 
-	opts := converter.Options{MergeCalls: merge, StripComments: strip, HoistVariables: hoistVars}
+	opts := converter.Options{MergeCalls: !noMerge, StripComments: strip, HoistVariables: hoistVars}
 
 	if dir != "" {
 		flagged, err := convertDir(dir, inplace, report, opts)
