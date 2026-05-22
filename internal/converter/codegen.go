@@ -264,7 +264,11 @@ func (g *generator) emitHoistedVars(nodes []node) {
 			g.header()
 			emittedAny = true
 		}
-		g.writef("local %s = %s", luaIdent(v.Name), formatValue(v.Value))
+		line := fmt.Sprintf("local %s = %s", luaIdent(v.Name), formatValue(v.Value))
+		if v.Trailing != "" {
+			line += " " + formatLuaComment(v.Trailing)
+		}
+		g.writeln(line)
 		g.translated(1)
 	}
 	if emittedAny {
@@ -309,7 +313,11 @@ func (g *generator) emit(n node) {
 		}
 		g.header()
 		g.flushConfig()
-		g.writef("local %s = %s", luaIdent(x.Name), formatValue(x.Value))
+		line := fmt.Sprintf("local %s = %s", luaIdent(x.Name), formatValue(x.Value))
+		if x.Trailing != "" {
+			line += " " + formatLuaComment(x.Trailing)
+		}
+		g.writeln(line)
 		// '$foo = bar' is a real syntactic rewrite to 'local foo = "bar"',
 		// so it counts against translated, not passthrough.
 		g.translated(1)
@@ -539,7 +547,7 @@ func emitConfTree(w *strings.Builder, t *confTree, depth int) {
 		child := t.children[e.key]
 		if child.value != "" && len(child.children) == 0 {
 			if child.trailing != "" {
-				fmt.Fprintf(w, "%s%s = %s, %s\n", indent, luaTableKey(e.key), child.value, child.trailing)
+				fmt.Fprintf(w, "%s%s = %s, %s\n", indent, luaTableKey(e.key), child.value, formatLuaComment(child.trailing))
 				continue
 			}
 			fmt.Fprintf(w, "%s%s = %s,\n", indent, luaTableKey(e.key), child.value)
@@ -891,6 +899,11 @@ func formatValue(raw string) string {
 	if strings.HasPrefix(raw, "$") && !strings.ContainsAny(raw, " \t,") && isDollarRef(raw) {
 		return luaIdent(raw)
 	}
+	// Multi-stop color gradient: two or more rgb()/rgba() tokens, optional
+	// trailing '<n>deg' angle. Rendered as { colors = {...}, angle = N }.
+	if g, ok := formatGradient(raw); ok {
+		return g
+	}
 	// String with embedded $var refs → "literal " .. var .. " more".
 	if strings.Contains(raw, "$") {
 		if expr, ok := interpolate(raw); ok {
@@ -898,6 +911,70 @@ func formatValue(raw string) string {
 		}
 	}
 	return quoteLuaString(raw)
+}
+
+// formatGradient detects a Hyprland color-gradient string like
+//   "rgba(33ccffee) rgba(00ff99ee) 45deg"
+// and renders it as a Lua table literal:
+//   { colors = { "rgba(33ccffee)", "rgba(00ff99ee)" }, angle = 45 }
+// Requires at least two rgb()/rgba() tokens. The angle is optional. Returns
+// ok=false for anything that isn't a multi-stop gradient so the caller falls
+// back to plain string quoting.
+func formatGradient(raw string) (string, bool) {
+	var colors []string
+	rest := raw
+	for {
+		rest = strings.TrimLeft(rest, " \t")
+		lower := strings.ToLower(rest)
+		var prefix string
+		switch {
+		case strings.HasPrefix(lower, "rgba("):
+			prefix = rest[:5]
+		case strings.HasPrefix(lower, "rgb("):
+			prefix = rest[:4]
+		default:
+			goto done
+		}
+		end := strings.IndexByte(rest, ')')
+		if end < 0 {
+			return "", false
+		}
+		colors = append(colors, prefix+rest[len(prefix):end+1])
+		rest = rest[end+1:]
+	}
+done:
+	if len(colors) < 2 {
+		return "", false
+	}
+	rest = strings.TrimSpace(rest)
+	angle := ""
+	if rest != "" {
+		// Optional trailing '<number>deg'.
+		lower := strings.ToLower(rest)
+		if !strings.HasSuffix(lower, "deg") {
+			return "", false
+		}
+		num := strings.TrimSpace(rest[:len(rest)-3])
+		if !isLuaNumber(num) {
+			return "", false
+		}
+		angle = num
+	}
+	var b strings.Builder
+	b.WriteString("{ colors = { ")
+	for i, c := range colors {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(quoteLuaString(c))
+	}
+	b.WriteString(" }")
+	if angle != "" {
+		b.WriteString(", angle = ")
+		b.WriteString(angle)
+	}
+	b.WriteString(" }")
+	return b.String(), true
 }
 
 func isDollarRef(s string) bool {

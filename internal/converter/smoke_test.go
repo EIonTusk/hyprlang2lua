@@ -130,7 +130,7 @@ bind = $mainMod shift, X, exec, bar
 	}
 	for _, want := range []string{
 		`hl.bind("SHIFT + PRINT",`,
-		`hl.bind("SHIFT + SUPER + 201",`,
+		`hl.bind("SHIFT + SUPER + code:201",`,
 		`hl.bind("CTRL + ALT + t",`,
 		`hl.bind(mainMod .. " + SHIFT + X",`,
 	} {

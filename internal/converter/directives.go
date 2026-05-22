@@ -266,6 +266,14 @@ func normalizeModToken(s string) string {
 func combineModKey(mod, key string) string {
 	mod = strings.TrimSpace(mod)
 	key = strings.TrimSpace(key)
+	// A multi-digit integer in the key slot is a raw evdev keycode (e.g.
+	// multimedia keys not in Hyprland's key-name table). Hyprland's bind
+	// parser accepts these only via the 'code:N' prefix; without it, lookup
+	// fails silently. Single digits ("1".."9", "0") are valid keysym names
+	// for the number-row keys and are left alone.
+	if len(key) > 1 && isAllDigits(key) {
+		key = "code:" + key
+	}
 	if mod == "" {
 		return formatValue(key)
 	}
@@ -318,6 +326,18 @@ func combineModKey(mod, key string) string {
 		pieces = append(pieces, quoteLuaString(tail))
 	}
 	return strings.Join(pieces, " .. ")
+}
+
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // sanitizeDispatcher turns a hyprlang dispatcher name like 'togglefloating'
