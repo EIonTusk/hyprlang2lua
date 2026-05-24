@@ -1170,26 +1170,42 @@ func (g *generator) emitSource(d Directive) {
 // so we map slashes to dots rather than throwing them away.
 //
 // Examples:
-//   colors.conf               -> "colors"
-//   themes/dark.conf          -> "themes.dark"
-//   ~/.config/hypr/mocha.conf -> "mocha"   (absolute paths reduce to basename
-//                                            because '~' / '.config' / '.' are
-//                                            outside the user's package.path)
+//   colors.conf                                -> "colors"
+//   themes/dark.conf                           -> "themes.dark"
+//   ~/.config/hypr/mocha.conf                  -> "mocha"
+//   ~/.config/hypr/conf/monitor.conf           -> "conf.monitor"
+//   ~/.config/hypr/conf/animations/default.conf -> "conf.animations.default"
+//   ~/.cache/wal/colors-hyprland.conf          -> "colors-hyprland"  (no hypr/ segment)
 //
-// Absolute paths (starting with '/' or '~') reduce to just their basename:
-// the directory tree above an absolute root is meaningless to package.path.
-// Same goes for the './' prefix — Lua's require uses package.path lookup
-// rather than relative-from-cwd file resolution, so the dot is dropped.
-// Anything else (a relative path) is preserved with '/' → '.'.
+// Hyprland's Lua runtime starts with cwd set to the user's Hyprland config
+// root (typically ~/.config/hypr/), so anything under that root can be
+// addressed as a relative path via package.path's './?.lua' pattern.
+//
+// For absolute paths we look for the last '/hypr/' segment and treat what
+// follows as a path relative to the Hyprland config root. Stripping to just
+// the basename — the previous behavior — collapses subdirectories, which
+// breaks modular configs that organize sources under conf/, themes/, etc.
+// and makes per-subdir 'default.conf' files all collide on require("default").
+//
+// For absolute paths outside any 'hypr' directory (e.g. ~/.cache/wal/foo.conf)
+// the directory tree above is meaningless to package.path, so we fall back
+// to basename — the caller will need package.path tweaks regardless.
+//
+// Relative paths (including the './' prefix) are preserved with '/' → '.'
+// since they already address into package.path's ./?.lua lookup naturally.
 func moduleNameFor(path string) string {
 	path = strings.TrimSpace(path)
+	path = strings.ReplaceAll(path, "\\", "/")
 	if strings.HasPrefix(path, "/") || strings.HasPrefix(path, "~") {
-		if i := strings.LastIndexAny(path, "/\\"); i >= 0 {
+		// Reduce absolute paths to a path relative to the Hyprland config
+		// root when possible; otherwise fall back to basename.
+		if i := strings.LastIndex(path, "/hypr/"); i >= 0 {
+			path = path[i+len("/hypr/"):]
+		} else if i := strings.LastIndex(path, "/"); i >= 0 {
 			path = path[i+1:]
 		}
 	} else {
 		path = strings.TrimPrefix(path, "./")
-		path = strings.ReplaceAll(path, "\\", "/")
 	}
 	path = strings.TrimSuffix(path, ".conf")
 	path = strings.TrimSuffix(path, ".lua")
