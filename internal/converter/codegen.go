@@ -1032,6 +1032,17 @@ func interpolate(raw string) (string, bool) {
 	for i < len(raw) {
 		c := raw[i]
 		if c == '$' && i+1 < len(raw) {
+			// Hyprlang identifiers must not start with a digit, same rule as
+			// Lua locals (see luaIdent / isDollarRef). Leading-digit forms
+			// like $2 are shell/awk positionals — e.g. inside an exec arg
+			// 'awk {print $2}' — and must pass through as literal text, not
+			// be rewritten into a (digit-prefixed) Lua local reference.
+			first := raw[i+1]
+			if first >= '0' && first <= '9' {
+				lit.WriteByte(c)
+				i++
+				continue
+			}
 			// Read identifier chars.
 			j := i + 1
 			for j < len(raw) {
