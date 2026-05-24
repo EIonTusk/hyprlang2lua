@@ -2,6 +2,7 @@ package converter
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -110,13 +111,29 @@ func buildDispatcher(name string, args []string) (string, string) {
 		if len(args) == 0 {
 			return "hl.dsp.window.resize()", ""
 		}
-		return fmt.Sprintf("hl.dsp.window.resize(%s)", quoteLuaString(joinArgs(args))), ""
+		expr, reason := pixelDispatchExpr("hl.dsp.window.resize", joinArgs(args), true)
+		if reason != "" {
+			return "", fmt.Sprintf("%s: %s", name, reason)
+		}
+		return expr, ""
 	case "resizewindowpixel":
-		return fmt.Sprintf("hl.dsp.window.resize(%s)", quoteLuaString(joinArgs(args))), ""
+		expr, reason := pixelDispatchExpr("hl.dsp.window.resize", joinArgs(args), false)
+		if reason != "" {
+			return "", fmt.Sprintf("resizewindowpixel: %s", reason)
+		}
+		return expr, ""
 	case "moveactive":
-		return fmt.Sprintf("hl.dsp.window.move(%s)", quoteLuaString(joinArgs(args))), ""
+		expr, reason := pixelDispatchExpr("hl.dsp.window.move", joinArgs(args), true)
+		if reason != "" {
+			return "", fmt.Sprintf("moveactive: %s", reason)
+		}
+		return expr, ""
 	case "movewindowpixel":
-		return fmt.Sprintf("hl.dsp.window.move(%s)", quoteLuaString(joinArgs(args))), ""
+		expr, reason := pixelDispatchExpr("hl.dsp.window.move", joinArgs(args), false)
+		if reason != "" {
+			return "", fmt.Sprintf("movewindowpixel: %s", reason)
+		}
+		return expr, ""
 	case "pin":
 		return "hl.dsp.window.pin()", ""
 	case "tagwindow":
@@ -191,6 +208,72 @@ func focusDirectionExpr(args []string) (string, string) {
 // emitted by the splitter.
 func joinArgs(args []string) string {
 	return strings.Join(args, ", ")
+}
+
+// pixelDispatchExpr emits a Lua table call for the
+// resize/move-active/-window-pixel dispatcher family. The hyprlang form is
+// either 'X Y', 'X% Y%' or 'exact X Y' and Hyprland's Lua API requires
+// a table { x, y, relative?, window? } — passing a string fails at load
+// time with 'expected no args, or a table'.
+//
+// 'relative' controls the default polarity (delta for *active/*window,
+// absolute for *pixel). The 'exact' keyword in 'resizeactive exact X Y'
+// overrides to absolute regardless. Comma-separated tail args ('X Y, WIN')
+// are treated as a window selector and emitted as window = "WIN".
+//
+// Pixel/percent forms: '20' emits as a numeric literal; '20%' emits as the
+// quoted string "20%" because the runtime accepts both numeric pixels and
+// percent-string forms on the same x/y field. Anything we can't parse
+// returns ("", reason) so the caller can flag the line for manual review.
+func pixelDispatchExpr(call, raw string, relative bool) (string, string) {
+	raw = strings.TrimSpace(raw)
+	// 'exact X Y' inverts polarity: 'exact' means absolute pixels.
+	if strings.HasPrefix(strings.ToLower(raw), "exact") && (len(raw) == 5 || raw[5] == ' ' || raw[5] == '\t') {
+		raw = strings.TrimSpace(raw[5:])
+		relative = false
+	}
+	// Optional trailing ', WINDOW' selector — applies to *windowpixel forms.
+	var window string
+	if i := strings.Index(raw, ","); i >= 0 {
+		window = strings.TrimSpace(raw[i+1:])
+		raw = strings.TrimSpace(raw[:i])
+	}
+	parts := strings.Fields(raw)
+	if len(parts) != 2 {
+		return "", fmt.Sprintf("expected 'X Y' or 'X%% Y%%', got %q", raw)
+	}
+	x, okX := pixelArg(parts[0])
+	y, okY := pixelArg(parts[1])
+	if !okX || !okY {
+		return "", fmt.Sprintf("could not parse pixel coords %q", raw)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s({ x = %s, y = %s", call, x, y)
+	if relative {
+		b.WriteString(", relative = true")
+	}
+	if window != "" {
+		fmt.Fprintf(&b, ", window = %s", formatValue(window))
+	}
+	b.WriteString(" })")
+	return b.String(), ""
+}
+
+// pixelArg parses one resize/move coordinate token. Plain integers (with
+// optional sign) emit as numeric literals; the 'N%' percent form emits as
+// a quoted string. Anything else fails so the caller flags the line.
+func pixelArg(tok string) (string, bool) {
+	if strings.HasSuffix(tok, "%") {
+		n := strings.TrimSuffix(tok, "%")
+		if _, err := strconv.Atoi(n); err != nil {
+			return "", false
+		}
+		return quoteLuaString(tok), true
+	}
+	if _, err := strconv.Atoi(tok); err != nil {
+		return "", false
+	}
+	return tok, true
 }
 
 // joinFormatted formats each arg via formatValue() and joins with ', '.
