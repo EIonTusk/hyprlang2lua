@@ -72,7 +72,7 @@ func buildDispatcher(name string, args []string) (string, string) {
 	case "movetoworkspace":
 		return fmt.Sprintf("hl.dsp.window.move({ workspace = %s })", formatValue(joinArgs(args))), ""
 	case "movetoworkspacesilent":
-		return fmt.Sprintf("hl.dsp.window.move({ workspace = %s, silent = true })", formatValue(joinArgs(args))), ""
+		return fmt.Sprintf("hl.dsp.window.move({ workspace = %s, follow = false })", formatValue(joinArgs(args))), ""
 	case "togglespecialworkspace":
 		return fmt.Sprintf("hl.dsp.workspace.toggle_special(%s)", quoteLuaString(joinArgs(args))), ""
 	case "renameworkspace":
@@ -89,9 +89,16 @@ func buildDispatcher(name string, args []string) (string, string) {
 		return "hl.dsp.window.center()", ""
 	case "fullscreen":
 		if len(args) == 0 {
-			return "hl.dsp.window.fullscreen()", ""
+			return `hl.dsp.window.fullscreen({ mode = "fullscreen" })`, ""
 		}
-		return fmt.Sprintf("hl.dsp.window.fullscreen(%s)", formatValue(joinArgs(args))), ""
+		switch strings.TrimSpace(joinArgs(args)) {
+		case "0":
+			return `hl.dsp.window.fullscreen({ mode = "fullscreen" })`, ""
+		case "1":
+			return `hl.dsp.window.fullscreen({ mode = "maximized" })`, ""
+		default:
+			return fmt.Sprintf(`hl.dsp.window.fullscreen({ mode = %s })`, formatValue(joinArgs(args))), ""
+		}
 	case "fullscreenstate":
 		return fmt.Sprintf("hl.dsp.window.fullscreen_state(%s)", joinFormatted(args)), ""
 	case "togglefloating":
@@ -169,7 +176,7 @@ func buildDispatcher(name string, args []string) (string, string) {
 	case "togglepin":
 		return "hl.dsp.window.pin()", ""
 	case "togglefullscreen":
-		return "hl.dsp.window.fullscreen()", ""
+		return `hl.dsp.window.fullscreen({ mode = "fullscreen" })`, ""
 	case "splitratio":
 		return fmt.Sprintf("hl.dsp.layout(%s)", quoteLuaString("splitratio "+joinArgs(args))), ""
 	}
