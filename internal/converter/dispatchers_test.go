@@ -65,3 +65,48 @@ func TestBuildDispatcher_ResizeMove(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildDispatcher_WorkspaceAndFullscreen(t *testing.T) {
+	cases := []struct {
+		name     string
+		disp     string
+		args     []string
+		wantExpr string
+		wantFail bool
+	}{
+		// Silent workspace move uses follow=false, not silent=true.
+		{"movetoworkspacesilent number", "movetoworkspacesilent", []string{"5"},
+			"hl.dsp.window.move({ workspace = 5, follow = false })", false},
+		{"movetoworkspacesilent named", "movetoworkspacesilent", []string{"m-1"},
+			`hl.dsp.window.move({ workspace = "m-1", follow = false })`, false},
+		{"movetoworkspacesilent special", "movetoworkspacesilent", []string{"special:magic"},
+			`hl.dsp.window.move({ workspace = "special:magic", follow = false })`, false},
+
+		// fullscreen dispatcher maps numeric arg to mode string.
+		{"fullscreen no arg", "fullscreen", nil,
+			`hl.dsp.window.fullscreen({ mode = "fullscreen" })`, false},
+		{"fullscreen 0 = fullscreen", "fullscreen", []string{"0"},
+			`hl.dsp.window.fullscreen({ mode = "fullscreen" })`, false},
+		{"fullscreen 1 = maximized", "fullscreen", []string{"1"},
+			`hl.dsp.window.fullscreen({ mode = "maximized" })`, false},
+		{"togglefullscreen", "togglefullscreen", nil,
+			`hl.dsp.window.fullscreen({ mode = "fullscreen" })`, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, reason := buildDispatcher(tc.disp, tc.args)
+			if tc.wantFail {
+				if reason == "" {
+					t.Fatalf("expected failure but got expr %q", got)
+				}
+				return
+			}
+			if reason != "" {
+				t.Fatalf("unexpected failure: %s", reason)
+			}
+			if got != tc.wantExpr {
+				t.Errorf("buildDispatcher(%q, %v):\n  got:  %s\n  want: %s", tc.disp, tc.args, got, tc.wantExpr)
+			}
+		})
+	}
+}
