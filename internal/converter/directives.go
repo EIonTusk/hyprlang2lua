@@ -416,8 +416,19 @@ func (g *generator) emitExec(d Directive) {
 	g.translated(1)
 }
 
-// emitMonitor: 'monitor = NAME,MODE,POSITION,SCALE[,extra...]'
-// or 'monitor = NAME,disable' or 'monitor = NAME,addreserved,...'
+// emitMonitor: 'monitor = NAME,MODE,POSITION,SCALE[,KEY,VALUE]*'
+//
+// Hyprland's handleMonitor also accepts three special 2-arg forms at
+// position 1 (immediately after the output name) — see
+// src/config/ConfigManager.cpp:2297-2310 in v0.54.0:
+//
+//	monitor = NAME, disable
+//	monitor = NAME, disabled
+//	monitor = NAME, transform, <N>
+//	monitor = NAME, addreserved, <top>, <bottom>, <left>, <right>
+//
+// Anything else at position 1 is treated as the resolution, followed by
+// position, scale, then a stream of repeating KEY,VALUE tail params.
 func (g *generator) emitMonitor(d Directive) {
 	parts := splitCommas(d.Value)
 	if len(parts) == 0 || (len(parts) == 1 && parts[0] == "") {
@@ -426,7 +437,8 @@ func (g *generator) emitMonitor(d Directive) {
 	}
 	name := parts[0]
 
-	if len(parts) >= 2 && strings.EqualFold(parts[1], "disable") {
+	// Special form: 'monitor = NAME, disable' / 'disabled'.
+	if len(parts) >= 2 && (strings.EqualFold(parts[1], "disable") || strings.EqualFold(parts[1], "disabled")) {
 		g.writeln("hl.monitor({")
 		g.writef("    output = %s,", quoteLuaString(name))
 		g.writeln("    disabled = true,")
@@ -436,9 +448,29 @@ func (g *generator) emitMonitor(d Directive) {
 		return
 	}
 
-	// addreserved / transform / bitdepth / cm etc. are out-of-line keywords
-	// — handle the common case (4-field positional) and emit a TODO for
-	// extension forms.
+	// Special form: 'monitor = NAME, transform, N'.
+	if len(parts) >= 3 && strings.EqualFold(parts[1], "transform") {
+		g.writeln("hl.monitor({")
+		g.writef("    output = %s,", quoteLuaString(name))
+		g.writef("    transform = %s,", formatValue(parts[2]))
+		g.writeln("})")
+		g.writeln("")
+		g.translated(1)
+		return
+	}
+
+	// Special form: 'monitor = NAME, addreserved, TOP, BOTTOM, LEFT, RIGHT'.
+	if len(parts) >= 6 && strings.EqualFold(parts[1], "addreserved") {
+		g.writeln("hl.monitor({")
+		g.writef("    output = %s,", quoteLuaString(name))
+		g.writef("    addreserved = { top = %s, bottom = %s, left = %s, right = %s },",
+			formatValue(parts[2]), formatValue(parts[3]), formatValue(parts[4]), formatValue(parts[5]))
+		g.writeln("})")
+		g.writeln("")
+		g.translated(1)
+		return
+	}
+
 	fields := []string{}
 	fields = append(fields, fmt.Sprintf("    output = %s,", quoteLuaString(name)))
 	if len(parts) > 1 && parts[1] != "" {
@@ -460,8 +492,11 @@ func (g *generator) emitMonitor(d Directive) {
 		g.writeln(f)
 	}
 	if len(extras) > 0 {
-		// Try to recognize a few keyword extensions: 'transform,N', 'bitdepth,N',
-		// 'vrr,N', 'mirror,name', 'cm,...'.
+		// Tail KEY,VALUE pairs accepted by handleMonitor at
+		// src/config/ConfigManager.cpp:2350-2389 in v0.54.0. Each KEY
+		// consumes exactly one VALUE; numeric keys go through
+		// formatValue (so '1' stays numeric, 'auto' becomes "auto"),
+		// string-only keys are always quoted.
 		i := 0
 		for i < len(extras) {
 			kw := strings.ToLower(extras[i])
@@ -472,9 +507,15 @@ func (g *generator) emitMonitor(d Directive) {
 					i += 2
 					continue
 				}
-			case "mirror":
+			case "sdrbrightness", "sdrsaturation":
 				if i+1 < len(extras) {
-					g.writef("    mirror = %s,", quoteLuaString(extras[i+1]))
+					g.writef("    %s = %s,", kw, formatValue(extras[i+1]))
+					i += 2
+					continue
+				}
+			case "mirror", "workspace", "cm":
+				if i+1 < len(extras) {
+					g.writef("    %s = %s,", kw, quoteLuaString(extras[i+1]))
 					i += 2
 					continue
 				}
@@ -528,7 +569,10 @@ func (g *generator) emitMonitorV2Block(s Section) {
 		// vrr, supports_*) and pass through the boolean/number coercer
 		// instead so `disabled = 1` becomes the right Lua type.
 		switch strings.ToLower(f.key) {
-		case "disabled", "vrr", "supports_wide_color", "supports_hdr":
+		case "disabled", "vrr", "supports_wide_color", "supports_hdr",
+			"sdrbrightness", "sdrsaturation",
+			"sdr_min_luminance", "sdr_max_luminance",
+			"min_luminance", "max_luminance", "max_avg_luminance":
 			add("    %s = %s,", luaTableKey(f.key), formatValue(f.value))
 		default:
 			add("    %s = %s,", luaTableKey(f.key), quoteLuaString(f.value))

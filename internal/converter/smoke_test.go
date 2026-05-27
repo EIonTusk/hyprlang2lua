@@ -594,3 +594,86 @@ layerrule = above_lock 2, waybar15
 }
 
 // TestMonitorSpecialForms covers the three 2-arg special forms accepted
+// TestMonitorSpecialForms covers the three 2-arg special forms accepted
+// at parts[1] (disable/disabled, transform N, addreserved …) plus the
+// expanded tail-param set (cm, sdrbrightness, sdrsaturation, workspace).
+func TestMonitorSpecialForms(t *testing.T) {
+	src := `monitor = DP-1, disable
+monitor = DP-2, disabled
+monitor = DP-3, transform, 3
+monitor = DP-4, addreserved, 10, 20, 0, 0
+monitor = DP-5, 1920x1080, 0x0, 1, cm, srgb, sdrbrightness, 1.2, sdrsaturation, 1.0, workspace, 2
+monitor = HDMI-1, preferred, auto-right, 1, vrr, 1, bitdepth, 10
+`
+	out, rpt, err := Convert(src)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	for _, want := range []string{
+		`output = "DP-1",`,
+		`output = "DP-2",`,
+		`disabled = true,`,                                                // both DP-1 and DP-2
+		`output = "DP-3",`,
+		`transform = 3,`,                                                  // DP-3 special form
+		`output = "DP-4",`,
+		`addreserved = { top = 10, bottom = 20, left = 0, right = 0 },`,  // DP-4 special form
+		`output = "DP-5",`,
+		`cm = "srgb",`,
+		`sdrbrightness = 1.2,`,
+		`sdrsaturation = 1.0,`,
+		`workspace = "2",`,
+		`mode = "preferred",`,
+		`position = "auto-right",`,
+		`vrr = 1,`,
+		`bitdepth = 10,`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "extra field") {
+		t.Errorf("a monitor tail param that should be recognized produced a TODO:\n%s", out)
+	}
+	if rpt.Flagged != 0 {
+		t.Errorf("expected no flagged monitor params, got %d: %+v", rpt.Flagged, rpt.Notes)
+	}
+}
+
+// TestMonitorV2LuminanceFields confirms that monitorv2 block fields
+// for HDR/SDR luminance and brightness emit as numbers, not strings —
+// per Hyprland v0.54.0's parse table for monitorv2.
+func TestMonitorV2LuminanceFields(t *testing.T) {
+	src := `monitorv2 {
+    output = HDMI-1
+    mode = 3840x2160@60
+    sdrbrightness = 1.2
+    sdrsaturation = 0.95
+    sdr_min_luminance = 0.005
+    sdr_max_luminance = 80
+    min_luminance = 0.001
+    max_luminance = 1000
+    max_avg_luminance = 400
+    supports_hdr = 1
+    supports_wide_color = 1
+}
+`
+	out, _, err := Convert(src)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	for _, want := range []string{
+		`sdrbrightness = 1.2,`,
+		`sdrsaturation = 0.95,`,
+		`sdr_min_luminance = 0.005,`,
+		`sdr_max_luminance = 80,`,
+		`min_luminance = 0.001,`,
+		`max_luminance = 1000,`,
+		`max_avg_luminance = 400,`,
+		`supports_hdr = 1,`,
+		`supports_wide_color = 1,`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing numeric field %q in:\n%s", want, out)
+		}
+	}
+}
