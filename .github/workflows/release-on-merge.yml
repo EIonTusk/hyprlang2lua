@@ -1,0 +1,225 @@
+name: release-on-merge
+
+# Cuts a release whenever a PR is merged into master with a release label.
+#
+# Setup (one-time):
+#   1. Create three repo labels: `fix` (patch bump), `feat` (minor bump),
+#      `breaking` (major bump). PRs with none of these merge silently.
+#   2. Add `AUR_SSH_KEY` to repo secrets — the private half of an SSH key
+#      whose public half is registered at https://aur.archlinux.org/account.
+#   3. If master is branch-protected, allow `github-actions[bot]` to bypass
+#      (same setting wasm.yml already relies on).
+#
+# What it does, in order:
+#   - Maps the PR's release label to a semver bump.
+#   - Tags master HEAD with the next version.
+#   - Waits for GitHub to materialize archive/<tag>.tar.gz.
+#   - Bumps packaging/aur/PKGBUILD (pkgver, pkgrel=1, sha256sums).
+#   - Regenerates packaging/aur/.SRCINFO via `makepkg --printsrcinfo`
+#     inside an archlinux container (matches MAINTAINING.md step 3).
+#   - Bumps flake.nix's `version`.
+#   - Verifies the Nix build; if vendorHash is stale, rewrites it from
+#     the hash-mismatch error and re-verifies.
+#   - Commits the packaging bump to master with [skip ci].
+#   - Creates a GitHub Release with auto-generated notes.
+#   - Pushes the PKGBUILD + .SRCINFO to the AUR git remote.
+#
+# Manual cut: trigger via the Actions tab (workflow_dispatch) — pick patch /
+# minor / major. Useful for retries or out-of-band releases.
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [master]
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Release bump (patch | minor | major)'
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-on-merge
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Decide bump
+        id: bump
+        env:
+          GH_EVENT_NAME: ${{ github.event_name }}
+          MANUAL_BUMP:   ${{ inputs.bump }}
+          LABELS_JSON:   ${{ toJSON(github.event.pull_request.labels) }}
+        run: |
+          set -euo pipefail
+          if [ "$GH_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "kind=$MANUAL_BUMP" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Precedence: breaking > feat > fix. First match wins.
+          kind=none
+          if   echo "$LABELS_JSON" | jq -e '.[] | select(.name=="breaking")' >/dev/null; then kind=major
+          elif echo "$LABELS_JSON" | jq -e '.[] | select(.name=="feat")'     >/dev/null; then kind=minor
+          elif echo "$LABELS_JSON" | jq -e '.[] | select(.name=="fix")'      >/dev/null; then kind=patch
+          fi
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "Detected bump kind: $kind"
+
+      - name: Compute next version
+        if: steps.bump.outputs.kind != 'none'
+        id: ver
+        run: |
+          set -euo pipefail
+          cur=$(git tag --sort=-v:refname | head -n1)
+          [ -n "$cur" ] || cur=v0.0.0
+          IFS=. read -r maj min pat <<< "${cur#v}"
+          case "${{ steps.bump.outputs.kind }}" in
+            major) maj=$((maj+1)); min=0; pat=0 ;;
+            minor) min=$((min+1)); pat=0 ;;
+            patch) pat=$((pat+1)) ;;
+          esac
+          TAG="v${maj}.${min}.${pat}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists; refusing to overwrite." >&2
+            exit 1
+          fi
+          echo "tag=$TAG"          >> "$GITHUB_OUTPUT"
+          echo "ver=${maj}.${min}.${pat}" >> "$GITHUB_OUTPUT"
+          echo "Next version: $TAG"
+
+      - name: Tag release
+        if: steps.bump.outputs.kind != 'none'
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "$TAG"
+          git push origin "$TAG"
+
+      - name: Wait for archive tarball
+        if: steps.bump.outputs.kind != 'none'
+        env:
+          URL: https://github.com/${{ github.repository }}/archive/${{ steps.ver.outputs.tag }}.tar.gz
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5 6; do
+            if curl -fsSL -o /tmp/release.tar.gz "$URL"; then exit 0; fi
+            sleep 5
+          done
+          echo "Tarball never appeared at $URL" >&2
+          exit 1
+
+      - name: Bump PKGBUILD
+        if: steps.bump.outputs.kind != 'none'
+        env:
+          VER: ${{ steps.ver.outputs.ver }}
+        run: |
+          set -euo pipefail
+          SHA=$(sha256sum /tmp/release.tar.gz | awk '{print $1}')
+          sed -i -E \
+            -e "s/^pkgver=.*/pkgver=$VER/" \
+            -e "s/^pkgrel=.*/pkgrel=1/" \
+            -e "s/^sha256sums=.*/sha256sums=('$SHA')/" \
+            packaging/aur/PKGBUILD
+          echo "--- PKGBUILD diff ---"
+          git diff -- packaging/aur/PKGBUILD
+
+      - name: Regenerate .SRCINFO
+        if: steps.bump.outputs.kind != 'none'
+        # makepkg refuses to run as root, hence the throwaway user.
+        # Mirror what MAINTAINING.md step 3 does locally.
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD/packaging/aur:/work" -w /work \
+            archlinux:base-devel \
+            bash -c 'useradd -m b && chown -R b /work && cd /work && sudo -u b makepkg --printsrcinfo > .SRCINFO'
+          echo "--- .SRCINFO diff ---"
+          git diff -- packaging/aur/.SRCINFO
+
+      - name: Bump flake.nix version
+        if: steps.bump.outputs.kind != 'none'
+        env:
+          VER: ${{ steps.ver.outputs.ver }}
+        run: |
+          set -euo pipefail
+          sed -i -E "s/^( *)version = \"[^\"]*\";/\1version = \"$VER\";/" flake.nix
+          echo "--- flake.nix diff ---"
+          git diff -- flake.nix
+
+      - name: Install Nix
+        if: steps.bump.outputs.kind != 'none'
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Verify Nix build (auto-fix vendorHash if go.sum changed)
+        if: steps.bump.outputs.kind != 'none'
+        run: |
+          set -euo pipefail
+          if nix build .#default --no-link 2> /tmp/nix.log; then
+            echo "Nix build OK, vendorHash unchanged."
+            exit 0
+          fi
+          if ! grep -q 'hash mismatch' /tmp/nix.log; then
+            echo "Nix build failed for a non-hash reason:" >&2
+            cat /tmp/nix.log >&2
+            exit 1
+          fi
+          NEWHASH=$(grep -E '^\s*got:\s+sha256-' /tmp/nix.log | head -n1 | awk '{print $2}')
+          if [ -z "$NEWHASH" ]; then
+            echo "Could not parse new hash from nix output:" >&2
+            cat /tmp/nix.log >&2
+            exit 1
+          fi
+          echo "Updating vendorHash to $NEWHASH"
+          sed -i -E "s|vendorHash = \"[^\"]*\";|vendorHash = \"$NEWHASH\";|" flake.nix
+          nix build .#default --no-link
+
+      - name: Commit packaging bump
+        if: steps.bump.outputs.kind != 'none'
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git add packaging/aur/PKGBUILD packaging/aur/.SRCINFO flake.nix
+          if git diff --cached --quiet; then
+            echo "Nothing to commit — packaging files already up to date."
+            exit 0
+          fi
+          git commit -m "ci: bump packaging to $TAG [skip ci]"
+          git push origin master
+
+      - name: Create GitHub Release
+        if: steps.bump.outputs.kind != 'none'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG:      ${{ steps.ver.outputs.tag }}
+        run: gh release create "$TAG" --generate-notes --title "$TAG"
+
+      - name: Publish to AUR
+        if: steps.bump.outputs.kind != 'none'
+        uses: KSXGitHub/github-actions-deploy-aur@v2.7.2
+        with:
+          pkgname: hyprlang2lua
+          pkgbuild: packaging/aur/PKGBUILD
+          commit_username: EIonTusk
+          commit_email: eiontusk@github.com
+          ssh_private_key: ${{ secrets.AUR_SSH_KEY }}
+          commit_message: "Update to ${{ steps.ver.outputs.tag }}"
