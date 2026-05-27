@@ -543,3 +543,54 @@ func TestWindowRuleUnknownMatcher(t *testing.T) {
 
 // TestMonitorV2LuminanceFields confirms that monitorv2 block fields
 // for HDR/SDR luminance and brightness emit as numbers, not strings —
+
+// TestLayerRuleEffects covers every layer-rule effect in v0.54.0's
+// EFFECT_STRINGS, including the modern underscored spellings and their
+// pre-0.54 folk aliases, plus the new 'above_lock' argument.
+func TestLayerRuleEffects(t *testing.T) {
+	src := `layerrule = no_anim, waybar
+layerrule = noanim, waybar2
+layerrule = blur, waybar3
+layerrule = blur_popups, waybar4
+layerrule = blurpopups, waybar5
+layerrule = dim_around, waybar6
+layerrule = dimaround, waybar7
+layerrule = no_screen_share, waybar8
+layerrule = noscreenshare, waybar9
+layerrule = xray, waybar10
+layerrule = ignore_alpha 0.5, waybar11
+layerrule = ignorealpha 0.7, waybar12
+layerrule = animation popin, waybar13
+layerrule = order 1, waybar14
+layerrule = above_lock 2, waybar15
+`
+	out, rpt, err := Convert(src)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	for _, want := range []string{
+		`no_anim = true,`,
+		`blur = true,`,
+		`blur_popups = true,`,
+		`dim_around = true,`,
+		`no_screen_share = true,`,
+		`xray = true,`,
+		`ignore_alpha = 0.5,`,
+		`ignore_alpha = 0.7,`,
+		`animation = "popin",`,
+		`order = 1,`,
+		`above_lock = 2,`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "unmapped layer rule") {
+		t.Errorf("a layer rule that should be recognized produced a TODO:\n%s", out)
+	}
+	if rpt.Flagged != 0 {
+		t.Errorf("expected no flagged layer rules, got %d: %+v", rpt.Flagged, rpt.Notes)
+	}
+}
+
+// TestMonitorSpecialForms covers the three 2-arg special forms accepted
