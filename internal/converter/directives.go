@@ -649,7 +649,11 @@ func (g *generator) emitWindowRuleBlock(s Section) {
 		}
 		switch {
 		case f.key == "match" && f.sub != "":
-			matches = append(matches, matchKV{f.sub, f.value})
+			k := strings.ToLower(f.sub)
+			if normalized, ok := normalizeMatchKey(k); ok {
+				k = normalized
+			}
+			matches = append(matches, matchKV{k, f.value})
 		case f.sub == "" && f.key == "name":
 			name = f.value
 		case f.sub == "":
@@ -777,7 +781,11 @@ func (g *generator) emitLayerRuleBlock(s Section) {
 		}
 		switch {
 		case f.key == "match" && f.sub != "":
-			matches = append(matches, matchKV{f.sub, f.value})
+			k := strings.ToLower(f.sub)
+			if normalized, ok := normalizeMatchKey(k); ok {
+				k = normalized
+			}
+			matches = append(matches, matchKV{k, f.value})
 		case f.sub == "" && f.key == "name":
 			name = f.value
 		case f.sub == "":
@@ -969,7 +977,12 @@ func classifyWindowRuleField(field string, v2, firstField bool) (string, string,
 			// 'match:foo' with no value is bogus; fall through.
 			return "", "", false
 		}
-		return strings.TrimSpace(rest[:sp]), strings.TrimSpace(rest[sp+1:]), true
+		k := strings.ToLower(strings.TrimSpace(rest[:sp]))
+		v := strings.TrimSpace(rest[sp+1:])
+		if normalized, ok := normalizeMatchKey(k); ok {
+			k = normalized
+		}
+		return k, v, true
 	}
 	if !v2 {
 		return "", "", false
@@ -978,19 +991,16 @@ func classifyWindowRuleField(field string, v2, firstField bool) (string, string,
 	// rather than treating every colon-separated field as a match, because
 	// actions like 'workspace 2' or 'monitor DP-1' use spaces, not colons,
 	// in the v2 grammar.
-	knownMatchKeys := map[string]bool{
-		"class": true, "title": true, "initialclass": true, "initialtitle": true,
-		"tag": true, "xwayland": true, "floating": true, "fullscreen": true,
-		"pinned": true, "focus": true, "workspace": true, "onworkspace": true,
-		"fullscreenstate": true, "pid": true,
-		// per HL.WindowQueryFilter in hl.meta.lua
-		"monitor": true, "mapped": true,
-	}
+	//
+	// The canonical match key set comes from MATCH_PROP_STRINGS in
+	// src/desktop/rule/Rule.cpp (Hyprland v0.54.0); we also accept legacy
+	// pre-0.54 spellings ('initialclass', 'floating', 'pinned', …) that
+	// older configs still use, and normalize them on emission.
 	if i := strings.IndexByte(field, ':'); i > 0 {
 		k := strings.ToLower(strings.TrimSpace(field[:i]))
 		v := strings.TrimSpace(field[i+1:])
-		if knownMatchKeys[k] && !firstField {
-			return k, v, true
+		if normalized, ok := normalizeMatchKey(k); ok && !firstField {
+			return normalized, v, true
 		}
 		// The leading field is allowed to be a matcher only for backward
 		// compat with configs that write 'class:foo, float' — but that's
@@ -998,6 +1008,47 @@ func classifyWindowRuleField(field string, v2, firstField bool) (string, string,
 		// as actions, which is the common case.
 	}
 	return "", "", false
+}
+
+// normalizeMatchKey returns the canonical (modern, underscored) Lua-side
+// match key for a hyprlang matcher, accepting both legacy spellings and
+// the modern ones from MATCH_PROP_STRINGS (Hyprland v0.54.0). Returns
+// ok=false for keys that aren't matchers in any historical version.
+func normalizeMatchKey(k string) (string, bool) {
+	switch k {
+	case "class", "title", "tag", "xwayland", "fullscreen", "focus",
+		"workspace", "group", "modal", "content", "xdg_tag", "namespace":
+		return k, true
+	case "initial_class", "initialclass":
+		return "initial_class", true
+	case "initial_title", "initialtitle":
+		return "initial_title", true
+	case "float", "floating":
+		return "float", true
+	case "pin", "pinned":
+		return "pin", true
+	case "fullscreen_state_internal":
+		return "fullscreen_state_internal", true
+	case "fullscreen_state_client":
+		return "fullscreen_state_client", true
+	case "fullscreenstate":
+		// Pre-0.54 single-value form; v0.54+ split it into _internal /
+		// _client. Default to _internal — the more commonly used —
+		// rather than emit a TODO, since the user's intent is usually
+		// "the actual fullscreen state of the window".
+		return "fullscreen_state_internal", true
+	case "onworkspace":
+		// Pre-0.54 alias for 'workspace'.
+		return "workspace", true
+	case "monitor", "pid", "mapped":
+		// Accepted by pre-0.54 windowrulev2 parsers but dropped from
+		// MATCH_PROP_STRINGS in 0.54+. Pass through verbatim so the
+		// generated Lua at least preserves the user's intent; if
+		// they're loading against current Hyprland they'll need to
+		// hand-port the rule.
+		return k, true
+	}
+	return "", false
 }
 
 // truthyAction handles bare-flag actions that may carry an explicit '1'/'0'
