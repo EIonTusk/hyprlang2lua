@@ -194,7 +194,7 @@ func (g *generator) emitBind(d Directive) {
 	}
 
 	keyExpr := combineModKey(mod, key)
-	dispatchExpr, reason := buildDispatcher(dispatcher, args)
+	dispatchExpr, reason := buildDispatcher(dispatcher, args, g.polyfill)
 	if reason != "" {
 		// Emit a best-effort guess as a comment so the user can see exactly
 		// what was attempted, plus the specific reason it couldn't be safely
