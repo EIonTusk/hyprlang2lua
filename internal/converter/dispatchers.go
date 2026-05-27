@@ -18,7 +18,7 @@ import (
 // only accepts HL.Dispatcher values. A non-empty reason distinguishes
 // "name we don't know" from "name we know but these arguments are wrong",
 // so the caller can produce a useful flag note.
-func buildDispatcher(name string, args []string) (string, string) {
+func buildDispatcher(name string, args []string, polyfill bool) (string, string) {
 	switch name {
 	// ---- Process / system ----
 	case "exec":
@@ -118,25 +118,25 @@ func buildDispatcher(name string, args []string) (string, string) {
 		if len(args) == 0 {
 			return "hl.dsp.window.resize()", ""
 		}
-		expr, reason := pixelDispatchExpr("hl.dsp.window.resize", joinArgs(args), true)
+		expr, reason := pixelDispatchExpr("hl.dsp.window.resize", joinArgs(args), true, polyfill)
 		if reason != "" {
 			return "", fmt.Sprintf("%s: %s", name, reason)
 		}
 		return expr, ""
 	case "resizewindowpixel":
-		expr, reason := pixelDispatchExpr("hl.dsp.window.resize", joinArgs(args), false)
+		expr, reason := pixelDispatchExpr("hl.dsp.window.resize", joinArgs(args), false, polyfill)
 		if reason != "" {
 			return "", fmt.Sprintf("resizewindowpixel: %s", reason)
 		}
 		return expr, ""
 	case "moveactive":
-		expr, reason := pixelDispatchExpr("hl.dsp.window.move", joinArgs(args), true)
+		expr, reason := pixelDispatchExpr("hl.dsp.window.move", joinArgs(args), true, polyfill)
 		if reason != "" {
 			return "", fmt.Sprintf("moveactive: %s", reason)
 		}
 		return expr, ""
 	case "movewindowpixel":
-		expr, reason := pixelDispatchExpr("hl.dsp.window.move", joinArgs(args), false)
+		expr, reason := pixelDispatchExpr("hl.dsp.window.move", joinArgs(args), false, polyfill)
 		if reason != "" {
 			return "", fmt.Sprintf("movewindowpixel: %s", reason)
 		}
@@ -217,29 +217,37 @@ func joinArgs(args []string) string {
 	return strings.Join(args, ", ")
 }
 
-// pixelDispatchExpr emits a Lua table call for the
-// resize/move-active/-window-pixel dispatcher family. The hyprlang form is
-// either 'X Y', 'X% Y%' or 'exact X Y' and Hyprland's Lua API requires
-// a table { x, y, relative?, window? } — passing a string fails at load
-// time with 'expected no args, or a table'.
+// pixelDispatchExpr emits a Lua call for the resize/move-active/-window-pixel
+// dispatcher family. The hyprlang form is 'X Y', 'X% Y%' or 'exact X Y', with
+// an optional trailing ', WINDOW' selector. Hyprland 0.55's typed Lua API
+// requires a table { x, y, relative?, window? } where x/y are NUMERIC pixels
+// only — strings (including "10%") are rejected by tableOptNum and fail at
+// config-load with "'x' and 'y' are required".
+//
+// Pure-numeric inputs ('20 0', 'exact 1024 768') emit a single typed call:
+//
+//	hl.dsp.window.resize({ x = 20, y = 0, relative = true })
+//
+// Percent inputs ('10% 5%') have no direct API equivalent. With polyfill=false
+// they're rejected via reason. With polyfill=true they're emitted as a closure
+// that resolves the percent against the appropriate runtime reference at
+// dispatch time and hl.dispatch()es the resulting typed call. References per
+// legacy hyprlang (src/Compositor.cpp parseWindowVectorArgsRelative):
+//
+//	resizeactive / moveactive       → active window  (w.size for resize, w.at for move)
+//	resizewindowpixel / movewindowpixel + selector → selected window via hl.get_window(sel)
+//	'exact' prefix                  → active monitor's size, absolute
 //
 // 'relative' controls the default polarity (delta for *active/*window,
-// absolute for *pixel). The 'exact' keyword in 'resizeactive exact X Y'
-// overrides to absolute regardless. Comma-separated tail args ('X Y, WIN')
-// are treated as a window selector and emitted as window = "WIN".
-//
-// Pixel/percent forms: '20' emits as a numeric literal; '20%' emits as the
-// quoted string "20%" because the runtime accepts both numeric pixels and
-// percent-string forms on the same x/y field. Anything we can't parse
-// returns ("", reason) so the caller can flag the line for manual review.
-func pixelDispatchExpr(call, raw string, relative bool) (string, string) {
+// absolute for *pixel); the 'exact' keyword overrides to absolute regardless.
+func pixelDispatchExpr(call, raw string, relative, polyfill bool) (string, string) {
 	raw = strings.TrimSpace(raw)
-	// 'exact X Y' inverts polarity: 'exact' means absolute pixels.
+	exact := false
 	if strings.HasPrefix(strings.ToLower(raw), "exact") && (len(raw) == 5 || raw[5] == ' ' || raw[5] == '\t') {
 		raw = strings.TrimSpace(raw[5:])
 		relative = false
+		exact = true
 	}
-	// Optional trailing ', WINDOW' selector — applies to *windowpixel forms.
 	var window string
 	if i := strings.Index(raw, ","); i >= 0 {
 		window = strings.TrimSpace(raw[i+1:])
@@ -249,8 +257,17 @@ func pixelDispatchExpr(call, raw string, relative bool) (string, string) {
 	if len(parts) != 2 {
 		return "", fmt.Sprintf("expected 'X Y' or 'X%% Y%%', got %q", raw)
 	}
-	x, okX := pixelArg(parts[0])
-	y, okY := pixelArg(parts[1])
+
+	hasPercent := strings.HasSuffix(parts[0], "%") || strings.HasSuffix(parts[1], "%")
+	if hasPercent {
+		if !polyfill {
+			return "", fmt.Sprintf("percent coords %q have no direct Lua API equivalent (Hyprland 0.55's x/y are numeric-only); enable polyfill to emit a runtime helper closure", raw)
+		}
+		return percentPolyfillExpr(call, parts[0], parts[1], relative, exact, window)
+	}
+
+	x, okX := pixelInt(parts[0])
+	y, okY := pixelInt(parts[1])
 	if !okX || !okY {
 		return "", fmt.Sprintf("could not parse pixel coords %q", raw)
 	}
@@ -266,17 +283,76 @@ func pixelDispatchExpr(call, raw string, relative bool) (string, string) {
 	return b.String(), ""
 }
 
-// pixelArg parses one resize/move coordinate token. Plain integers (with
-// optional sign) emit as numeric literals; the 'N%' percent form emits as
-// a quoted string. Anything else fails so the caller flags the line.
-func pixelArg(tok string) (string, bool) {
+// percentPolyfillExpr emits a closure that resolves a percent X/Y pair at
+// dispatch time, then hl.dispatch()es the typed resize/move call. Returned
+// as a single-line Lua expression so it slots into hl.bind(key, EXPR, opts)
+// exactly like the typed form. 'exact' inputs reference the active monitor's
+// size; window-selector inputs reference that window's runtime size/position;
+// otherwise the active window is used. A nil-guard skips the dispatch when
+// the reference object isn't available, matching the legacy dispatcher's
+// silent no-op when there is no active window.
+func percentPolyfillExpr(call, xTok, yTok string, relative, exact bool, window string) (string, string) {
+	isMove := strings.Contains(call, ".move")
+	var setup, refX, refY string
+	switch {
+	case exact:
+		setup = "local m = hl.get_active_monitor(); if not m then return end"
+		refX, refY = "m.width", "m.height"
+	case window != "":
+		setup = fmt.Sprintf("local w = hl.get_window(%s); if not w then return end", formatValue(window))
+		if isMove {
+			refX, refY = "w.at.x", "w.at.y"
+		} else {
+			refX, refY = "w.size.x", "w.size.y"
+		}
+	default:
+		setup = "local w = hl.get_active_window(); if not w then return end"
+		if isMove {
+			refX, refY = "w.at.x", "w.at.y"
+		} else {
+			refX, refY = "w.size.x", "w.size.y"
+		}
+	}
+
+	xExpr, okX := polyfillCoord(xTok, refX)
+	yExpr, okY := polyfillCoord(yTok, refY)
+	if !okX || !okY {
+		return "", fmt.Sprintf("could not parse polyfill coords %q %q", xTok, yTok)
+	}
+
+	var tbl strings.Builder
+	fmt.Fprintf(&tbl, "{ x = %s, y = %s", xExpr, yExpr)
+	if relative {
+		tbl.WriteString(", relative = true")
+	}
+	if window != "" {
+		fmt.Fprintf(&tbl, ", window = %s", formatValue(window))
+	}
+	tbl.WriteString(" }")
+
+	return fmt.Sprintf("function() %s; hl.dispatch(%s(%s)) end", setup, call, tbl.String()), ""
+}
+
+// polyfillCoord turns one X or Y token into a Lua expression suitable for the
+// polyfill closure body. Plain integers pass through as literals; 'N%' becomes
+// `math.floor(ref * N / 100)` so the runtime resize/move sees a clean integer.
+func polyfillCoord(tok, ref string) (string, bool) {
 	if strings.HasSuffix(tok, "%") {
 		n := strings.TrimSuffix(tok, "%")
 		if _, err := strconv.Atoi(n); err != nil {
 			return "", false
 		}
-		return quoteLuaString(tok), true
+		return fmt.Sprintf("math.floor(%s * %s / 100)", ref, n), true
 	}
+	if _, err := strconv.Atoi(tok); err != nil {
+		return "", false
+	}
+	return tok, true
+}
+
+// pixelInt parses a plain integer pixel token (no percent — the caller has
+// already routed percent inputs to the polyfill path).
+func pixelInt(tok string) (string, bool) {
 	if _, err := strconv.Atoi(tok); err != nil {
 		return "", false
 	}

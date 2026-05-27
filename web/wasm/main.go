@@ -1,13 +1,13 @@
 // Wasm entry point. Exposes window.hyprlang2lua = {
-//   convert(src: string, opts?: { mergeCalls?: boolean, stripComments?: boolean, hoistVariables?: boolean })
+//   convert(src: string, opts?: { mergeCalls?: boolean, stripComments?: boolean, hoistVariables?: boolean, polyfill?: boolean })
 //     -> {lua: string, translated: int, passthrough: int,
 //         flagged: int, coverage: number, notes: array,
 //         lineClass: { [line: number]: "translated"|"flagged"|"passthrough" },
 //         error: string|null}
 // }
 //
-// `mergeCalls` defaults to true (matches CLI). The legacy `mergeConfig` key
-// is still accepted for back-compat.
+// `mergeCalls` and `polyfill` default to true (match CLI). The legacy
+// `mergeConfig` key is still accepted for back-compat.
 //
 // Build:
 //   GOOS=js GOARCH=wasm go build -o ../main.wasm .
@@ -37,10 +37,11 @@ func convert(this js.Value, args []js.Value) any {
 		result.Set("error", "convert(src, opts?) expects (string, object?)")
 		return result
 	}
-	// Defaults match the CLI: merge ON, the rest OFF. JS callers can
-	// override either explicitly. The legacy `mergeConfig` key is accepted
-	// for back-compat with anyone still embedding the older wasm contract.
-	opts := converter.Options{MergeCalls: true}
+	// Defaults match the CLI: merge ON, polyfill ON, the rest OFF. JS
+	// callers can override either explicitly. The legacy `mergeConfig` key
+	// is accepted for back-compat with anyone still embedding the older
+	// wasm contract.
+	opts := converter.Options{MergeCalls: true, Polyfill: true}
 	if len(args) >= 2 && args[1].Type() == js.TypeObject {
 		if v := args[1].Get("mergeCalls"); v.Type() == js.TypeBoolean {
 			opts.MergeCalls = v.Bool()
@@ -52,6 +53,9 @@ func convert(this js.Value, args []js.Value) any {
 		}
 		if v := args[1].Get("hoistVariables"); v.Type() == js.TypeBoolean {
 			opts.HoistVariables = v.Bool()
+		}
+		if v := args[1].Get("polyfill"); v.Type() == js.TypeBoolean {
+			opts.Polyfill = v.Bool()
 		}
 	}
 	lua, rpt, err := converter.ConvertWithOptions(args[0].String(), opts)

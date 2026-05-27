@@ -12,7 +12,7 @@
         copyBtn = $("copy-btn"), downloadBtn = $("download-btn"),
         sampleBtn = $("sample-btn"), clearBtn = $("clear-btn"),
         mergeConfig = $("merge-config"), stripComments = $("strip-comments"),
-        hoistVariables = $("hoist-variables"),
+        hoistVariables = $("hoist-variables"), polyfill = $("polyfill"),
         gutter = $("gutter"), gutterLines = $("gutter-lines"),
         outGutter = $("out-gutter"), outGutterLines = $("out-gutter-lines"),
         divider = $("divider"), main = document.querySelector("main"),
@@ -154,6 +154,7 @@ bindm = $mainMod, mouse:272, movewindow
       mergeCalls: !!mergeConfig.checked,
       stripComments: !!stripComments.checked,
       hoistVariables: !!hoistVariables.checked,
+      polyfill: !!polyfill.checked,
     };
 
     let r;
@@ -315,6 +316,7 @@ bindm = $mainMod, mouse:272, movewindow
   mergeConfig.addEventListener("change", convert);
   stripComments.addEventListener("change", convert);
   hoistVariables.addEventListener("change", convert);
+  polyfill.addEventListener("change", convert);
 
   let debounceTimer;
   input.addEventListener("input", () => {

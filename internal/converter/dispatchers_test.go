@@ -2,11 +2,12 @@ package converter
 
 import "testing"
 
-// TestBuildDispatcher_ResizeMove covers the resize/move dispatcher family.
-// The hyprlang 'resizeactive X Y' form maps to Lua's hl.dsp.window.resize({
-// x, y, relative? }) and the Lua API rejects string args with 'expected no
-// args, or a table'. Earlier output passed quoteLuaString(joinArgs(args)),
-// which failed at config load and silently broke every following bind.
+// TestBuildDispatcher_ResizeMove covers the resize/move dispatcher family
+// with polyfill OFF (the default). The hyprlang 'resizeactive X Y' form
+// maps to Lua's hl.dsp.window.resize({ x, y, relative? }) and the Lua API
+// rejects string args with 'expected no args, or a table'. Percent inputs
+// have no numeric Lua equivalent at 0.55, so polyfill-off rejects them via
+// reason rather than emit a load-time-broken `x = "10%"` form.
 func TestBuildDispatcher_ResizeMove(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -22,14 +23,16 @@ func TestBuildDispatcher_ResizeMove(t *testing.T) {
 			"hl.dsp.window.resize({ x = 20, y = 0, relative = true })", false},
 		{"resize negative y", "resizeactive", []string{"0 -20"},
 			"hl.dsp.window.resize({ x = 0, y = -20, relative = true })", false},
-		{"resize percent", "resizeactive", []string{"10% 5%"},
-			`hl.dsp.window.resize({ x = "10%", y = "5%", relative = true })`, false},
 		{"resize exact keyword inverts to absolute", "resizeactive", []string{"exact 1024 768"},
 			"hl.dsp.window.resize({ x = 1024, y = 768 })", false},
 		{"resizewindow alias", "resizewindow", []string{"-10 0"},
 			"hl.dsp.window.resize({ x = -10, y = 0, relative = true })", false},
 		{"resize no args still works", "resizeactive", nil,
 			"hl.dsp.window.resize()", false},
+
+		// Percent: rejected without --polyfill (the typed API only accepts numbers).
+		{"resize percent rejected without polyfill", "resizeactive", []string{"10% 5%"}, "", true},
+		{"moveactive percent rejected without polyfill", "moveactive", []string{"10% 0"}, "", true},
 
 		// resizewindowpixel: absolute by default; trailing ',WINDOW' selector.
 		{"resizewindowpixel absolute", "resizewindowpixel", []string{"1024 768"},
@@ -49,7 +52,64 @@ func TestBuildDispatcher_ResizeMove(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, reason := buildDispatcher(tc.disp, tc.args)
+			got, reason := buildDispatcher(tc.disp, tc.args, false)
+			if tc.wantFail {
+				if reason == "" {
+					t.Fatalf("expected failure but got expr %q", got)
+				}
+				return
+			}
+			if reason != "" {
+				t.Fatalf("unexpected failure: %s", reason)
+			}
+			if got != tc.wantExpr {
+				t.Errorf("buildDispatcher(%q, %v):\n  got:  %s\n  want: %s", tc.disp, tc.args, got, tc.wantExpr)
+			}
+		})
+	}
+}
+
+// TestBuildDispatcher_ResizeMovePolyfill exercises the --polyfill path: any
+// percent input emits a closure that resolves the percent at dispatch time
+// against the appropriate runtime reference (active window for *active,
+// selected window for *windowpixel, active monitor for 'exact'), then
+// hl.dispatch()es the typed call. Pure-numeric inputs are unaffected by the
+// flag — they still emit the single typed call.
+func TestBuildDispatcher_ResizeMovePolyfill(t *testing.T) {
+	cases := []struct {
+		name     string
+		disp     string
+		args     []string
+		wantExpr string
+		wantFail bool
+	}{
+		// resizeactive percent → active window's size.
+		{"resizeactive percent both", "resizeactive", []string{"10% 5%"},
+			`function() local w = hl.get_active_window(); if not w then return end; hl.dispatch(hl.dsp.window.resize({ x = math.floor(w.size.x * 10 / 100), y = math.floor(w.size.y * 5 / 100), relative = true })) end`, false},
+		{"resizeactive mixed pixel and percent", "resizeactive", []string{"100 5%"},
+			`function() local w = hl.get_active_window(); if not w then return end; hl.dispatch(hl.dsp.window.resize({ x = 100, y = math.floor(w.size.y * 5 / 100), relative = true })) end`, false},
+
+		// moveactive percent → active window's position (matches legacy
+		// hyprlang: parseWindowVectorArgsRelative uses relativeTo = window.pos).
+		{"moveactive percent", "moveactive", []string{"10% 0"},
+			`function() local w = hl.get_active_window(); if not w then return end; hl.dispatch(hl.dsp.window.move({ x = math.floor(w.at.x * 10 / 100), y = 0, relative = true })) end`, false},
+
+		// exact prefix → active monitor's size, absolute (no relative=true).
+		{"resizeactive exact percent → monitor", "resizeactive", []string{"exact 50% 50%"},
+			`function() local m = hl.get_active_monitor(); if not m then return end; hl.dispatch(hl.dsp.window.resize({ x = math.floor(m.width * 50 / 100), y = math.floor(m.height * 50 / 100) })) end`, false},
+
+		// resizewindowpixel + selector + percent → that window's size.
+		{"resizewindowpixel percent with selector", "resizewindowpixel", []string{"50% 50%", "title:Firefox"},
+			`function() local w = hl.get_window("title:Firefox"); if not w then return end; hl.dispatch(hl.dsp.window.resize({ x = math.floor(w.size.x * 50 / 100), y = math.floor(w.size.y * 50 / 100), window = "title:Firefox" })) end`, false},
+
+		// Pure-numeric still emits the typed call even with polyfill on —
+		// no need for a closure when the typed API accepts the input directly.
+		{"resize numeric unchanged by polyfill", "resizeactive", []string{"-20 0"},
+			"hl.dsp.window.resize({ x = -20, y = 0, relative = true })", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, reason := buildDispatcher(tc.disp, tc.args, true)
 			if tc.wantFail {
 				if reason == "" {
 					t.Fatalf("expected failure but got expr %q", got)
@@ -94,7 +154,7 @@ func TestBuildDispatcher_WorkspaceAndFullscreen(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, reason := buildDispatcher(tc.disp, tc.args)
+			got, reason := buildDispatcher(tc.disp, tc.args, false)
 			if tc.wantFail {
 				if reason == "" {
 					t.Fatalf("expected failure but got expr %q", got)

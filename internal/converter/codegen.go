@@ -61,6 +61,11 @@ type generator struct {
 	// hoistVariables collects every VarDecl into a single block at the top
 	// of the output and skips emitting them at their source positions.
 	hoistVariables bool
+
+	// polyfill turns on runtime helper-code emission for hyprlang features
+	// that have no direct equivalent in the typed Lua API. See
+	// [Options.Polyfill] for the trade-off and the current feature list.
+	polyfill bool
 }
 
 func newGenerator(opts Options) *generator {
@@ -69,6 +74,7 @@ func newGenerator(opts Options) *generator {
 		merge:          opts.MergeCalls,
 		stripComments:  opts.StripComments,
 		hoistVariables: opts.HoistVariables,
+		polyfill:       opts.Polyfill,
 	}
 	if opts.MergeCalls {
 		g.mergedTree = newConfTree()

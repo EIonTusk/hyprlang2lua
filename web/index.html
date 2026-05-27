@@ -499,6 +499,12 @@
             <span class="hint">Collect every '$var = …' rewrite into a single block right after the header so all references resolve regardless of where they sit in the file.</span>
           </span>
         </label>
+        <label class="opt">
+          <input type="checkbox" id="polyfill" checked>
+          <span>emit polyfill helpers
+            <span class="hint">Emit small Lua closures to preserve hyprlang features that have no direct equivalent in the typed Lua API. Currently covers percent-form resize/move (e.g. 'resizeactive 10% 5%'), which the API doesn't accept directly — the closure reads the active window/monitor at dispatch time and converts to pixels. Uncheck to force strict output and flag any feature that would otherwise need a helper.</span>
+          </span>
+        </label>
       </div>
     </details>
   </span>

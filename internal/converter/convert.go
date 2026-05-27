@@ -77,6 +77,30 @@ type Options struct {
 	// variable from anywhere in the config remain valid. Source-position
 	// comments around the variables are preserved where they were.
 	HoistVariables bool
+
+	// Polyfill emits runtime Lua helper code to preserve hyprlang features
+	// whose semantics have no direct equivalent in Hyprland 0.55's typed Lua
+	// API. With Polyfill ON it emits a `function() ... end` closure that
+	// performs the needed runtime lookups (active window, monitor, etc.)
+	// before calling `hl.dispatch(...)`. With Polyfill OFF the converter is
+	// strict: any input it can't translate into a single typed API call is
+	// flagged. The trade-off: ON preserves more user intent at the cost of
+	// slightly larger output and a runtime query per dispatch.
+	//
+	// User-facing surfaces (the CLI binary and the web UI) default this to
+	// true — preserving the user's config wins over output minimalism. The
+	// CLI exposes `--no-polyfill` to opt out, matching the `--no-merge`
+	// pattern for [MergeCalls]. The zero value remains false so embedders
+	// that construct Options directly get strict behavior unless they ask.
+	//
+	// Currently powers:
+	//   - 'resizeactive 10% 5%' / 'moveactive 10% 5%' (and the *windowpixel
+	//     variants): percent inputs are rejected outright when OFF (the typed
+	//     resize/move table only accepts numeric pixels), and resolved at
+	//     dispatch time against the active/target window or monitor when ON.
+	// Future hyprlang features that need a runtime lookup should opt in
+	// through this same flag rather than introducing one knob per feature.
+	Polyfill bool
 }
 
 // Convert is the package entry point with default options. See

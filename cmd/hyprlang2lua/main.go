@@ -26,10 +26,11 @@ func main() {
 		report    bool
 		check     bool
 		inplace   bool
-		noMerge   bool
-		strip     bool
-		hoistVars bool
-		outPath   string
+		noMerge    bool
+		strip      bool
+		hoistVars  bool
+		noPolyfill bool
+		outPath    string
 	)
 	fs := flag.NewFlagSet("hyprlang2lua", flag.ContinueOnError)
 	fs.StringVarP(&dir, "dir", "d", "", "walk a `DIR`ectory tree, converting every *.conf to a sibling *.lua")
@@ -39,6 +40,7 @@ func main() {
 	fs.BoolVar(&noMerge, "no-merge", false, "emit a separate hl.X(...) call per source line instead of merging mergeable APIs (currently hl.config) into one call")
 	fs.BoolVarP(&strip, "strip-comments", "s", false, "drop comments from the output (TODO markers from flagged directives are kept)")
 	fs.BoolVar(&hoistVars, "hoist-vars", false, "move every '$var = ...' rewrite into a single block at the top of the output")
+	fs.BoolVar(&noPolyfill, "no-polyfill", false, "disable runtime Lua helper closures that preserve hyprlang features without a direct Hyprland 0.55 typed-API equivalent (currently: percent-form resize/move). Polyfill is on by default; use this flag to force strict output and flag any feature that would otherwise need a helper.")
 	fs.StringVarP(&outPath, "out", "o", "", "write output to `FILE` instead of stdout (single-file mode)")
 
 	fs.Usage = func() {
@@ -57,7 +59,7 @@ flags:
 		os.Exit(2)
 	}
 
-	opts := converter.Options{MergeCalls: !noMerge, StripComments: strip, HoistVariables: hoistVars}
+	opts := converter.Options{MergeCalls: !noMerge, StripComments: strip, HoistVariables: hoistVars, Polyfill: !noPolyfill}
 
 	if dir != "" {
 		flagged, err := convertDir(dir, inplace, report, opts)
