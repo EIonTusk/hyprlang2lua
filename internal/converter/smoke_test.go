@@ -339,3 +339,79 @@ windowrulev2 = norounding, class:^(b)$
 		t.Errorf("expected 2 flagged actions, got %d: %+v", rpt.Flagged, rpt.Notes)
 	}
 }
+// TestBindSuffixCodes locks in the correct semantics for every letter
+// suffix on `bind<letters>` directives, per Hyprland v0.54.0
+// src/config/ConfigManager.cpp:2526-2550. Three letters used to be
+// mapped wrong (bindd→drag, bindp→long_press, bindo→TODO) and three
+// were missing entirely (bindg, binds, bindu).
+func TestBindSuffixCodes(t *testing.T) {
+	src := `bindo = SUPER, X, exec, foo
+bindp = SUPER, Y, exec, foo
+bindg = SUPER, mouse:272, movewindow
+bindc = SUPER, mouse:273, exec, foo
+bindu = SUPER, Z, exec, foo
+bindd = SUPER, A, open kitty, exec, kitty
+binds = , XF86AudioMute & XF86AudioMicMute, exec, mute-all
+`
+	out, _, err := Convert(src)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	for _, want := range []string{
+		`{ long_press = true }`,
+		`{ dont_inhibit = true }`,
+		`{ release = true, drag = true }`,
+		`{ release = true, click = true }`,
+		`{ submap_universal = true }`,
+		`{ description = "open kitty" }`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	// 'binds' is a key-string semantic — no opts should be emitted, but
+	// the bind should still translate.
+	if !strings.Contains(out, `XF86AudioMute & XF86AudioMicMute`) {
+		t.Errorf("multi-key bind lost the '&'-joined key string:\n%s", out)
+	}
+	if strings.Contains(out, "unknown bind flag") {
+		t.Errorf("a bind suffix that should be recognized produced an unknown-flag TODO:\n%s", out)
+	}
+}
+
+// TestWindowRuleMatchers covers the matcher key set: every modern
+// underscored spelling, every legacy folk variant, and the pre-0.54
+// query-filter keys (monitor/pid/mapped) that survived for backward
+
+
+// TestBindSuffixCombinations covers multi-letter suffixes (e.g. 'bindel',
+// 'bindrl') and the unknown-letter fallback path. The single-letter cases
+// are already in TestBindSuffixCodes.
+func TestBindSuffixCombinations(t *testing.T) {
+	src := `bindel = , XF86AudioRaiseVolume, exec, foo
+bindrl = , XF86AudioPlay, exec, bar
+bindz = SUPER, X, exec, baz
+`
+	out, rpt, err := Convert(src)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if !strings.Contains(out, `{ locked = true, repeating = true }`) {
+		t.Errorf("bindel did not produce { locked + repeating }:\n%s", out)
+	}
+	if !strings.Contains(out, `{ locked = true, release = true }`) {
+		t.Errorf("bindrl did not produce { locked + release }:\n%s", out)
+	}
+	if !strings.Contains(out, `unknown bind flag(s) "z"`) {
+		t.Errorf("bindz did not surface as an unknown-flag TODO:\n%s", out)
+	}
+	if rpt.Flagged == 0 {
+		t.Errorf("expected at least one flag for the unknown suffix")
+	}
+}
+
+// TestWindowRuleBlockFormMatcherNormalization confirms that the block
+// form (`windowrule { match:KEY = VALUE, … }`) routes its matcher keys
+// through normalizeMatchKey, the same way the directive `KEY:VALUE`
+// form does. Legacy block-form configs that use 'initialclass',
+// 'floating', etc. must end up with the modern Lua-side spellings.
