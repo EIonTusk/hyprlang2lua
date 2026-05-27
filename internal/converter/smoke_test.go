@@ -415,3 +415,131 @@ bindz = SUPER, X, exec, baz
 // through normalizeMatchKey, the same way the directive `KEY:VALUE`
 // form does. Legacy block-form configs that use 'initialclass',
 // 'floating', etc. must end up with the modern Lua-side spellings.
+
+// TestWindowRuleMatchers covers the matcher key set: every modern
+// underscored spelling, every legacy folk variant, and the pre-0.54
+// query-filter keys (monitor/pid/mapped) that survived for backward
+// compatibility.
+func TestWindowRuleMatchers(t *testing.T) {
+	src := `windowrulev2 = float, initial_class:^foo$
+windowrulev2 = float, initialclass:^bar$
+windowrulev2 = float, initial_title:^baz$
+windowrulev2 = float, initialtitle:^qux$
+windowrulev2 = float, float:1
+windowrulev2 = float, floating:1
+windowrulev2 = float, pin:1
+windowrulev2 = float, pinned:1
+windowrulev2 = float, group:active
+windowrulev2 = float, modal:1
+windowrulev2 = float, content:video
+windowrulev2 = float, xdg_tag:work
+windowrulev2 = float, fullscreen_state_internal:1
+windowrulev2 = float, fullscreen_state_client:1
+windowrulev2 = float, fullscreenstate:1
+windowrulev2 = float, onworkspace:2
+windowrulev2 = float, monitor:DP-1
+windowrulev2 = float, pid:1234
+windowrulev2 = float, mapped:1
+`
+	out, _, err := Convert(src)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	for _, want := range []string{
+		`initial_class = "^foo$"`,
+		`initial_class = "^bar$"`, // initialclass legacy → initial_class
+		`initial_title = "^baz$"`,
+		`initial_title = "^qux$"`, // initialtitle → initial_title
+		`float = 1`,                       // formatValue: numeric stays numeric
+		`pin = 1`,
+		`group = "active"`,
+		`modal = 1`,
+		`content = "video"`,
+		`xdg_tag = "work"`,
+		`fullscreen_state_internal = 1`,
+		`fullscreen_state_client = 1`,
+		`monitor = "DP-1"`, // pre-0.54 query-filter key, preserved
+		`pid = 1234`,
+		`mapped = 1`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	// 'onworkspace' is a legacy alias for 'workspace' — should normalize.
+	if !strings.Contains(out, `workspace = 2`) {
+		t.Errorf("'onworkspace:2' did not normalize to workspace = 2:\n%s", out)
+	}
+	// 'fullscreenstate' (legacy single-form) defaults to _internal.
+	matches := strings.Count(out, `fullscreen_state_internal = 1`)
+	if matches < 2 {
+		t.Errorf("expected at least 2 fullscreen_state_internal matches (modern + legacy fullscreenstate); got %d:\n%s", matches, out)
+	}
+}
+
+// TestLayerRuleEffects covers every layer-rule effect in v0.54.0's
+// EFFECT_STRINGS, including the modern underscored spellings and their
+
+// TestWindowRuleBlockFormMatcherNormalization confirms that the block
+// form (`windowrule { match:KEY = VALUE, … }`) routes its matcher keys
+// through normalizeMatchKey, the same way the directive `KEY:VALUE`
+// form does. Legacy block-form configs that use 'initialclass',
+// 'floating', etc. must end up with the modern Lua-side spellings.
+func TestWindowRuleBlockFormMatcherNormalization(t *testing.T) {
+	src := `windowrule {
+    match:initialclass = ^picker$
+    match:floating = 1
+    match:pinned = 1
+    match:onworkspace = 2
+    no_focus = true
+}
+`
+	out, _, err := Convert(src)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	for _, want := range []string{
+		`initial_class = "^picker$"`,
+		`float = 1`,
+		`pin = 1`,
+		`workspace = 2`, // onworkspace → workspace
+		`no_focus = true`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing normalized %q in block-form output:\n%s", want, out)
+		}
+	}
+	for _, unwanted := range []string{
+		"initialclass = ",
+		"floating = ",
+		"pinned = ",
+		"onworkspace = ",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("block form emitted unnormalized key %q:\n%s", unwanted, out)
+		}
+	}
+}
+
+// TestWindowRuleUnknownMatcher confirms that a colon-form field whose
+// key isn't a recognized matcher falls through to the action handler
+// (where it'll surface as an unmapped-action TODO) rather than being
+// silently emitted as a matcher.
+func TestWindowRuleUnknownMatcher(t *testing.T) {
+	src := `windowrulev2 = float, bogus:value, class:^foo$
+`
+	out, _, err := Convert(src)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	if !strings.Contains(out, `unmapped window rule action: "bogus:value"`) {
+		t.Errorf("unknown matcher 'bogus:value' did not surface as a TODO:\n%s", out)
+	}
+	// Real matchers in the same rule still work.
+	if !strings.Contains(out, `class = "^foo$"`) {
+		t.Errorf("the real matcher 'class' did not survive alongside the unknown one:\n%s", out)
+	}
+}
+
+// TestMonitorV2LuminanceFields confirms that monitorv2 block fields
+// for HDR/SDR luminance and brightness emit as numbers, not strings —
