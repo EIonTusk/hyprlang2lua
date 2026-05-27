@@ -837,30 +837,40 @@ func (g *generator) emitLayerRuleBlock(s Section) {
 // appends to a string slice rather than writing directly. Kept separate
 // from the directive emitter so future changes to one form don't
 // inadvertently change the other.
+//
+// Effect keywords come from EFFECT_STRINGS in
+// src/desktop/rule/layerRule/LayerRuleEffectContainer.cpp (Hyprland
+// v0.54.0). The underscored forms are what current Hyprland accepts;
+// the no-underscore variants are pre-0.54 folk spellings kept as
+// aliases for older configs.
 func emitLayerRuleField(g *generator, rule string, line int, out *[]string) {
 	add := func(format string, args ...any) {
 		*out = append(*out, fmt.Sprintf(format, args...))
 	}
 	r := strings.TrimSpace(rule)
 	switch {
-	case r == "noanim":
+	case r == "no_anim", r == "noanim":
 		add("    no_anim = true,")
 	case r == "blur":
 		add("    blur = true,")
-	case r == "blurpopups":
+	case r == "blur_popups", r == "blurpopups":
 		add("    blur_popups = true,")
-	case r == "dimaround":
+	case r == "dim_around", r == "dimaround":
 		add("    dim_around = true,")
-	case r == "noscreenshare":
+	case r == "no_screen_share", r == "noscreenshare":
 		add("    no_screen_share = true,")
 	case r == "xray":
 		add("    xray = true,")
+	case strings.HasPrefix(r, "ignore_alpha "):
+		add("    ignore_alpha = %s,", formatValue(strings.TrimSpace(r[13:])))
 	case strings.HasPrefix(r, "ignorealpha "):
 		add("    ignore_alpha = %s,", formatValue(strings.TrimSpace(r[12:])))
 	case strings.HasPrefix(r, "animation "):
 		add("    animation = %s,", quoteLuaString(strings.TrimSpace(r[10:])))
 	case strings.HasPrefix(r, "order "):
 		add("    order = %s,", formatValue(strings.TrimSpace(r[6:])))
+	case strings.HasPrefix(r, "above_lock "):
+		add("    above_lock = %s,", formatValue(strings.TrimSpace(r[11:])))
 	default:
 		add("    -- TODO: manual review — unmapped layer rule: %q", r)
 		g.flag(line, "layer rule: "+r)
@@ -1235,34 +1245,7 @@ func (g *generator) emitLayerRule(d Directive) {
 	}
 
 	var actions []string
-	add := func(format string, args ...any) {
-		actions = append(actions, fmt.Sprintf(format, args...))
-	}
-
-	r := strings.TrimSpace(rule)
-	switch {
-	case r == "noanim":
-		add("    no_anim = true,")
-	case r == "blur":
-		add("    blur = true,")
-	case r == "blurpopups":
-		add("    blur_popups = true,")
-	case r == "dimaround":
-		add("    dim_around = true,")
-	case r == "noscreenshare":
-		add("    no_screen_share = true,")
-	case r == "xray":
-		add("    xray = true,")
-	case strings.HasPrefix(r, "ignorealpha "):
-		add("    ignore_alpha = %s,", formatValue(strings.TrimSpace(r[12:])))
-	case strings.HasPrefix(r, "animation "):
-		add("    animation = %s,", quoteLuaString(strings.TrimSpace(r[10:])))
-	case strings.HasPrefix(r, "order "):
-		add("    order = %s,", formatValue(strings.TrimSpace(r[6:])))
-	default:
-		add("    -- TODO: manual review — unmapped layer rule: %q", r)
-		g.flag(d.line, "layer rule: "+r)
-	}
+	emitLayerRuleField(g, rule, d.line, &actions)
 
 	g.coalesceRule("layer_rule", "namespace="+ns, preamble, actions)
 	g.translated(1)
