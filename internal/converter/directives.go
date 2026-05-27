@@ -987,6 +987,103 @@ func truthyAction(a, head string) (bool, bool) {
 	return false, false
 }
 
+// windowRuleFlag describes one boolean window-rule effect: the
+// hyprlang spellings the converter recognizes and the Lua field name
+// it emits. invert=true flips the value before emission — only used
+// for 'tile', whose semantics are the inverse of 'float'.
+//
+// Hyprland's parser does exact string matching against EFFECT_STRINGS
+// (src/desktop/rule/windowRule/WindowRuleEffectContainer.cpp) and
+// accepts only the underscored canonical spelling, which is listed
+// first in aliases. The no-underscore folk variants ('nofocus',
+// 'noshadow', …) are kept as legacy aliases for older configs and the
+// wiki that still document them.
+type windowRuleFlag struct {
+	aliases []string
+	field   string
+	invert  bool
+}
+
+// windowRuleFlags lists every boolean effect (entry in EFFECT_STRINGS
+// whose value resolves through truthy(raw) in WindowRule.cpp). Order
+// is irrelevant — none of the spellings prefix-overlap with each
+// other under truthyAction's "head" or "head SPACE arg" match.
+var windowRuleFlags = []windowRuleFlag{
+	{[]string{"float"}, "float", false},
+	{[]string{"tile"}, "float", true},
+	{[]string{"pin"}, "pin", false},
+	{[]string{"fullscreen"}, "fullscreen", false},
+	{[]string{"maximize"}, "maximize", false},
+	{[]string{"center"}, "center", false},
+	{[]string{"immediate"}, "immediate", false},
+	{[]string{"pseudo"}, "pseudo", false},
+	{[]string{"persistent_size"}, "persistent_size", false},
+	{[]string{"allows_input"}, "allows_input", false},
+	{[]string{"dim_around"}, "dim_around", false},
+	{[]string{"decorate"}, "decorate", false},
+	{[]string{"focus_on_activate"}, "focus_on_activate", false},
+	{[]string{"keep_aspect_ratio"}, "keep_aspect_ratio", false},
+	{[]string{"nearest_neighbor"}, "nearest_neighbor", false},
+	{[]string{"opaque"}, "opaque", false},
+	{[]string{"force_rgbx"}, "force_rgbx", false},
+	{[]string{"xray"}, "xray", false},
+	{[]string{"render_unfocused"}, "render_unfocused", false},
+	{[]string{"confine_pointer"}, "confine_pointer", false},
+	{[]string{"no_focus", "nofocus"}, "no_focus", false},
+	{[]string{"no_initial_focus", "noinitialfocus"}, "no_initial_focus", false},
+	{[]string{"no_anim", "noanim"}, "no_anim", false},
+	{[]string{"no_blur", "noblur"}, "no_blur", false},
+	{[]string{"no_shadow", "noshadow"}, "no_shadow", false},
+	{[]string{"no_screen_share", "noscreenshare"}, "no_screen_share", false},
+	{[]string{"no_dim"}, "no_dim", false},
+	{[]string{"no_follow_mouse"}, "no_follow_mouse", false},
+	{[]string{"no_max_size"}, "no_max_size", false},
+	{[]string{"no_shortcuts_inhibit"}, "no_shortcuts_inhibit", false},
+	{[]string{"no_vrr"}, "no_vrr", false},
+	{[]string{"no_auto_hdr"}, "no_auto_hdr", false},
+	{[]string{"stay_focused", "stayfocused"}, "stay_focused", false},
+	{[]string{"sync_fullscreen", "syncfullscreen"}, "sync_fullscreen", false},
+}
+
+// windowRuleArg describes one argument-taking window-rule effect. When
+// numeric=true the raw arg is fed through formatValue (so '2' stays
+// numeric); otherwise it's wrapped as a Lua string via quoteLuaString.
+// Vec2 and struct args ('move 100 200', 'fullscreen_state 0 0') are
+// quoted as-is and parsed on the Lua side.
+type windowRuleArg struct {
+	aliases []string
+	field   string
+	numeric bool
+}
+
+// windowRuleArgs lists every argument-taking effect. Aliases include
+// the no-underscore folk spellings for the keywords that historically
+// had one ('bordersize', 'bordercolor', 'suppressevent').
+var windowRuleArgs = []windowRuleArg{
+	{[]string{"move"}, "move", false},
+	{[]string{"size"}, "size", false},
+	{[]string{"min_size"}, "min_size", false},
+	{[]string{"max_size"}, "max_size", false},
+	{[]string{"workspace"}, "workspace", false},
+	{[]string{"opacity"}, "opacity", true},
+	{[]string{"rounding"}, "rounding", true},
+	{[]string{"rounding_power"}, "rounding_power", true},
+	{[]string{"border_size", "bordersize"}, "border_size", true},
+	{[]string{"border_color", "bordercolor"}, "border_color", false},
+	{[]string{"monitor"}, "monitor", false},
+	{[]string{"tag"}, "tag", false},
+	{[]string{"animation"}, "animation", false},
+	{[]string{"suppress_event", "suppressevent"}, "suppress_event", false},
+	{[]string{"group"}, "group", false},
+	{[]string{"content"}, "content", false},
+	{[]string{"fullscreen_state"}, "fullscreen_state", false},
+	{[]string{"no_close_for"}, "no_close_for", true},
+	{[]string{"scrolling_width"}, "scrolling_width", true},
+	{[]string{"scroll_mouse"}, "scroll_mouse", true},
+	{[]string{"scroll_touchpad"}, "scroll_touchpad", true},
+	{[]string{"idle_inhibit"}, "idle_inhibit", false},
+}
+
 // emitWindowAction formats one rule action and appends it (no trailing
 // newline) to *out so the pending-window-rule buffer can hold it for
 // later coalescing. The flushed line is written back through g.writeln,
@@ -997,78 +1094,40 @@ func emitWindowAction(g *generator, action string, line int, out *[]string) {
 		*out = append(*out, fmt.Sprintf(format, args...))
 	}
 
-	// Truthy/falsy flag actions: 'float', 'float 1', 'pin 0', etc.
-	for _, head := range []string{
-		"float", "pin", "fullscreen", "maximize",
-		"center", "noborder", "noshadow", "noblur", "norounding",
-		"nofocus", "noinitialfocus", "noanim", "noscreenshare",
-		"stayfocused", "syncfullscreen", "immediate",
-	} {
-		if val, ok := truthyAction(a, head); ok {
-			field := head
-			// Normalize a few hyprlang spellings to the Lua spec field names.
-			switch head {
-			case "noborder":
-				field = "border"
-				val = !val
-			case "noshadow":
-				field = "shadow"
-				val = !val
-			case "noblur":
-				field = "blur"
-				val = !val
-			case "norounding":
-				field = "rounding"
-				val = !val
-			case "nofocus":
-				field = "no_focus"
-			case "noinitialfocus":
-				field = "no_initial_focus"
-			case "noanim":
-				field = "no_anim"
-			case "noscreenshare":
-				field = "no_screen_share"
-			case "stayfocused":
-				field = "stay_focused"
-			case "syncfullscreen":
-				field = "sync_fullscreen"
+	// Boolean flags: 'no_focus', 'float 1', 'pin 0', etc.
+	for _, f := range windowRuleFlags {
+		for _, alias := range f.aliases {
+			val, ok := truthyAction(a, alias)
+			if !ok {
+				continue
 			}
-			add("    %s = %t,", field, val)
+			if f.invert {
+				val = !val
+			}
+			add("    %s = %t,", f.field, val)
 			return
 		}
 	}
 
-	switch {
-	case a == "tile":
-		add("    float = false,")
-	case strings.HasPrefix(a, "move "):
-		add("    move = %s,", quoteLuaString(strings.TrimSpace(a[5:])))
-	case strings.HasPrefix(a, "size "):
-		add("    size = %s,", quoteLuaString(strings.TrimSpace(a[5:])))
-	case strings.HasPrefix(a, "workspace "):
-		add("    workspace = %s,", quoteLuaString(strings.TrimSpace(a[10:])))
-	case strings.HasPrefix(a, "opacity "):
-		add("    opacity = %s,", formatValue(strings.TrimSpace(a[8:])))
-	case strings.HasPrefix(a, "rounding "):
-		add("    rounding = %s,", formatValue(strings.TrimSpace(a[9:])))
-	case strings.HasPrefix(a, "bordersize "):
-		add("    border_size = %s,", formatValue(strings.TrimSpace(a[11:])))
-	case strings.HasPrefix(a, "bordercolor "):
-		add("    border_color = %s,", quoteLuaString(strings.TrimSpace(a[12:])))
-	case strings.HasPrefix(a, "monitor "):
-		add("    monitor = %s,", quoteLuaString(strings.TrimSpace(a[8:])))
-	case strings.HasPrefix(a, "tag "):
-		add("    tag = %s,", quoteLuaString(strings.TrimSpace(a[4:])))
-	case strings.HasPrefix(a, "animation "):
-		add("    animation = %s,", quoteLuaString(strings.TrimSpace(a[10:])))
-	case strings.HasPrefix(a, "suppressevent "):
-		add("    suppress_event = %s,", quoteLuaString(strings.TrimSpace(a[14:])))
-	case strings.HasPrefix(a, "suppress_event "):
-		add("    suppress_event = %s,", quoteLuaString(strings.TrimSpace(a[15:])))
-	default:
-		add("    -- TODO: manual review — unmapped window rule action: %q", a)
-		g.flag(line, "window rule action: "+a)
+	// Argument-taking effects: 'move 100 100', 'opacity 0.9', etc.
+	for _, ar := range windowRuleArgs {
+		for _, alias := range ar.aliases {
+			prefix := alias + " "
+			if !strings.HasPrefix(a, prefix) {
+				continue
+			}
+			raw := strings.TrimSpace(a[len(prefix):])
+			if ar.numeric {
+				add("    %s = %s,", ar.field, formatValue(raw))
+			} else {
+				add("    %s = %s,", ar.field, quoteLuaString(raw))
+			}
+			return
+		}
 	}
+
+	add("    -- TODO: manual review — unmapped window rule action: %q", a)
+	g.flag(line, "window rule action: "+a)
 }
 
 // emitLayerRule: 'layerrule = RULE[:ARG], NAMESPACE_REGEX'
