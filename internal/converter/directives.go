@@ -123,35 +123,46 @@ func splitCommas(s string) []string {
 	return out
 }
 
-// emitBind translates bind[mlertnopcd] = MOD, KEY, DISPATCHER, ARGS...
+// emitBind translates bind[<letters>] = MOD, KEY[, DESCRIPTION], DISPATCHER, ARGS...
 //
-// Flag-derived options:
+// Suffix letters and the HL.BindOptions field each maps to (per
+// src/config/ConfigManager.cpp:2526-2550 in Hyprland v0.54.0):
+//
 //   bindm — mouse-button bind. The Lua API has no 'mouse' bind option (see
 //           HL.BindOptions in hl.meta.lua); the key string itself encodes
 //           the mouse button (e.g. "SUPER + mouse:272") and the dispatcher
 //           (movewindow → hl.dsp.window.drag) carries the semantic. No
 //           option field is emitted.
-//   binde — { repeating = true }
 //   bindl — { locked = true }
 //   bindr — { release = true }
+//   binde — { repeating = true }
 //   bindn — { non_consuming = true }
-//   bindo — only-when-no-modifier (no direct opt; flag as TODO)
 //   bindt — { transparent = true }
 //   bindi — { ignore_mods = true }
-//   bindp — { long_press = true }   (per stub HL.BindOptions field name)
-//   bindc — { click = true }
-//   bindd — { drag = true }
+//   bindo — { long_press = true }
+//   bindp — { dont_inhibit = true }       (bypass app keybind inhibit protocol)
+//   bindc — { click = true, release = true } (Hyprland forces release for click)
+//   bindg — { drag = true, release = true }  (same)
+//   bindu — { submap_universal = true }   (active across submaps)
+//   bindd — { description = "<the 3rd csv field>" }
+//                                          consumes an extra positional arg
+//                                          between KEY and DISPATCHER
+//   binds — multi-key (key string is '&'-joined keysyms). HL.BindOptions
+//           has no corresponding flag — the '&'-joined key string already
+//           encodes the semantic, same as 'm'.
 //
 // Multi-flag forms like 'bindle' combine; we walk the suffix one char at a time.
 func (g *generator) emitBind(d Directive) {
 	suffix := strings.TrimPrefix(d.Name, "bind")
 	opts := map[string]string{}
+	hasDescription := false
 	unknownFlags := []byte{}
 	for i := 0; i < len(suffix); i++ {
 		switch suffix[i] {
-		case 'm':
-			// No-op: 'mouse' is not a HL.BindOptions field; the key string
-			// and dispatcher already convey mouse-button semantics.
+		case 'm', 's':
+			// No-op: neither 'mouse' nor multi-key has a HL.BindOptions
+			// field. The key string itself encodes the semantic
+			// ("mouse:272", "key1&key2").
 		case 'e':
 			opts["repeating"] = "true"
 		case 'l':
@@ -164,12 +175,20 @@ func (g *generator) emitBind(d Directive) {
 			opts["transparent"] = "true"
 		case 'i':
 			opts["ignore_mods"] = "true"
-		case 'p':
+		case 'o':
 			opts["long_press"] = "true"
+		case 'p':
+			opts["dont_inhibit"] = "true"
 		case 'c':
 			opts["click"] = "true"
-		case 'd':
+			opts["release"] = "true"
+		case 'g':
 			opts["drag"] = "true"
+			opts["release"] = "true"
+		case 'u':
+			opts["submap_universal"] = "true"
+		case 'd':
+			hasDescription = true
 		default:
 			unknownFlags = append(unknownFlags, suffix[i])
 		}
@@ -180,17 +199,26 @@ func (g *generator) emitBind(d Directive) {
 	}
 
 	parts := splitCommas(d.Value)
-	if len(parts) < 3 {
+	minParts := 3
+	if hasDescription {
+		minParts = 4
+	}
+	if len(parts) < minParts {
 		g.writef("-- TODO: manual review — malformed bind on line %d: %s", d.line, d.Value)
 		g.flag(d.line, "malformed bind: "+d.Value)
 		return
 	}
 	mod := parts[0]
 	key := parts[1]
-	dispatcher := parts[2]
+	dispatchIdx := 2
+	if hasDescription {
+		opts["description"] = quoteLuaString(parts[2])
+		dispatchIdx = 3
+	}
+	dispatcher := parts[dispatchIdx]
 	args := []string{}
-	if len(parts) > 3 {
-		args = parts[3:]
+	if len(parts) > dispatchIdx+1 {
+		args = parts[dispatchIdx+1:]
 	}
 
 	keyExpr := combineModKey(mod, key)
@@ -215,7 +243,11 @@ func formatBindOpts(opts map[string]string) string {
 		return ""
 	}
 	// Stable order so output is deterministic.
-	order := []string{"locked", "release", "repeating", "non_consuming", "transparent", "ignore_mods", "long_press", "click", "drag"}
+	order := []string{
+		"locked", "release", "repeating", "non_consuming", "transparent",
+		"ignore_mods", "long_press", "dont_inhibit", "submap_universal",
+		"click", "drag", "description",
+	}
 	parts := []string{}
 	for _, k := range order {
 		if v, ok := opts[k]; ok {
