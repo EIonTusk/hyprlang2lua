@@ -1,17 +1,33 @@
 name: release-on-merge
 
-# Cuts a release whenever a PR is merged into master with a release label.
+# Cuts a release whenever a commit lands on master whose subject (or body
+# footer) matches the Conventional Commits spec. Bump kind is decided by the
+# head commit alone:
+#
+#   <type>(scope)!: ... or BREAKING CHANGE: footer → major
+#   feat(scope): ...                               → minor
+#   fix(scope): ...                                → patch
+#   anything else (chore/docs/refactor/ci/test/…)  → no release (silent exit)
+#
+# Triggers on push (not pull_request / pull_request_target) so the workflow
+# always runs with a writable GITHUB_TOKEN regardless of whether the merged
+# PR originated in the repo or a fork. Workflow-driven pushes (this job's
+# own packaging-bump commit, the wasm.yml rebuild commit) use GITHUB_TOKEN,
+# which GitHub Actions documents as NOT re-triggering workflow runs — so
+# there is no infinite-loop guard needed.
 #
 # Setup (one-time):
-#   1. Create three repo labels: `fix` (patch bump), `feat` (minor bump),
-#      `breaking` (major bump). PRs with none of these merge silently.
+#   1. Use squash-merge for PRs and write PR titles as Conventional Commits
+#      (the PR title becomes the master commit subject). Or use a merge
+#      commit whose subject follows the same convention.
 #   2. Add `AUR_SSH_KEY` to repo secrets — the private half of an SSH key
 #      whose public half is registered at https://aur.archlinux.org/account.
 #   3. If master is branch-protected, allow `github-actions[bot]` to bypass
 #      (same setting wasm.yml already relies on).
 #
 # What it does, in order:
-#   - Maps the PR's release label to a semver bump.
+#   - Reads the head commit subject and maps the conventional-commit type
+#     to a semver bump.
 #   - Tags master HEAD with the next version.
 #   - Waits for GitHub to materialize archive/<tag>.tar.gz.
 #   - Bumps packaging/aur/PKGBUILD (pkgver, pkgrel=1, sha256sums).
@@ -28,8 +44,7 @@ name: release-on-merge
 # minor / major. Useful for retries or out-of-band releases.
 
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches: [master]
   workflow_dispatch:
     inputs:
@@ -48,7 +63,6 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,21 +76,29 @@ jobs:
         env:
           GH_EVENT_NAME: ${{ github.event_name }}
           MANUAL_BUMP:   ${{ inputs.bump }}
-          LABELS_JSON:   ${{ toJSON(github.event.pull_request.labels) }}
+          COMMIT_MSG:    ${{ github.event.head_commit.message }}
         run: |
           set -euo pipefail
           if [ "$GH_EVENT_NAME" = "workflow_dispatch" ]; then
             echo "kind=$MANUAL_BUMP" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          # Precedence: breaking > feat > fix. First match wins.
+          subject=$(printf '%s\n' "$COMMIT_MSG" | head -n1)
+          # Precedence: explicit '!' breaking marker > 'BREAKING CHANGE:'
+          # footer > feat > fix. Anything else (chore/docs/refactor/ci/test
+          # /unconventional subjects) → no release.
           kind=none
-          if   echo "$LABELS_JSON" | jq -e '.[] | select(.name=="breaking")' >/dev/null; then kind=major
-          elif echo "$LABELS_JSON" | jq -e '.[] | select(.name=="feat")'     >/dev/null; then kind=minor
-          elif echo "$LABELS_JSON" | jq -e '.[] | select(.name=="fix")'      >/dev/null; then kind=patch
+          if [[ "$subject" =~ ^[a-z]+(\([^)]+\))?!: ]]; then
+            kind=major
+          elif printf '%s\n' "$COMMIT_MSG" | grep -qE '^BREAKING CHANGE:'; then
+            kind=major
+          elif [[ "$subject" =~ ^feat(\([^)]+\))?: ]]; then
+            kind=minor
+          elif [[ "$subject" =~ ^fix(\([^)]+\))?: ]]; then
+            kind=patch
           fi
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
-          echo "Detected bump kind: $kind"
+          echo "Head commit subject: '$subject' → bump kind: $kind"
 
       - name: Compute next version
         if: steps.bump.outputs.kind != 'none'

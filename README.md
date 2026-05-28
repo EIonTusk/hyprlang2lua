@@ -199,6 +199,31 @@ Golden fixtures live in `internal/converter/testdata/`; each `.conf` is
 paired with the expected `.lua` output. `FuzzConvert` exercises the lexer
 and parser against random byte sequences to catch panics.
 
+## Contributing
+
+PRs are squash-merged, so the PR title becomes the master commit subject —
+and the release workflow (`.github/workflows/release-on-merge.yml`) reads
+that subject to decide whether to cut a release and how to bump the version.
+Use the [Conventional Commits](https://www.conventionalcommits.org) format:
+
+| PR title prefix                              | Release |
+|----------------------------------------------|---------|
+| `feat:` / `feat(scope):`                     | minor   |
+| `fix:` / `fix(scope):`                       | patch   |
+| `feat!:` / `fix!:` / `<type>(scope)!:`       | major   |
+| commit body contains `BREAKING CHANGE:`      | major   |
+| `chore:` / `docs:` / `refactor:` / `ci:` / `test:` / non-conventional | no release |
+
+When a release-triggering commit lands on master, the workflow tags the
+version, regenerates `packaging/aur/PKGBUILD` + `.SRCINFO`, bumps
+`flake.nix`, fixes up a stale `vendorHash` if needed, opens a GitHub
+Release, and pushes to the AUR. None of that requires anything from you —
+just title the PR correctly.
+
+If a release fails or you need an out-of-band cut, dispatch the workflow
+manually from the **Actions** tab → *release-on-merge* → *Run workflow* and
+pick `patch` / `minor` / `major`.
+
 ## Authoritative sources
 
 Mappings were derived from, in priority order:
