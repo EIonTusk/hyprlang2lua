@@ -81,6 +81,8 @@ Flags:
 | `-r, --report`            | print `translated / passthrough / flagged / coverage%` to stderr    |
 | `-c, --check`             | exit code `3` if any directive was flagged for manual review        |
 | `    --no-merge`          | emit a separate `hl.X(...)` call per source line instead of merging mergeable APIs into one call. Merging is on by default and currently applies to `hl.config` — in practice it folds every per-section `hl.config({...})` into one call, with section-separating comments preserved inside the merged table. Other `hl.*` APIs (bind, window_rule, monitor, env, device, …) take one spec per call by design and pass through unchanged. |
+| `    --no-polyfill`       | disable runtime Lua helper closures used to preserve hyprlang features without a direct Hyprland 0.55 typed-API equivalent (currently: percent-form `resizeactive`/`moveactive`). Polyfill is on by default; passing this flag forces strict output and flags any such feature for manual review instead. |
+| `    --hoist-vars`        | move every `$var = ...` rewrite into a single block at the top of the output instead of emitting each `local` in source position |
 | `-s, --strip-comments`    | drop comments from the output (`-- TODO: manual review` markers from flagged directives are kept) |
 
 With no positional argument, the CLI reads from stdin — unless stdin is a
@@ -131,6 +133,12 @@ Exit codes: `0` success, `1` I/O or conversion error, `2` usage/flag error,
   `hl.plugin.<name>` and we can't safely guess the API.
 - `envd` is converted to `hl.env(...)`; the systemd/D-Bus propagation that
   `envd` provided needs to be replicated outside Lua.
+- Percent-form `resizeactive` / `moveactive` (e.g. `resizeactive 10% 5%`) and
+  the `*windowpixel` / `exact` variants. The 0.55 typed dispatch API only
+  accepts numeric pixels, so the converter emits a small runtime closure that
+  resolves the percent at dispatch time against the active window or monitor
+  and then calls `hl.dispatch(...)`. Disable with `--no-polyfill` to flag
+  these instead.
 
 Anything not in either list is preserved with a `-- TODO: manual review`
 comment, contributes to `flagged` in the report, and trips `--check`.
