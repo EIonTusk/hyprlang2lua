@@ -84,17 +84,23 @@ jobs:
             exit 0
           fi
           subject=$(printf '%s\n' "$COMMIT_MSG" | head -n1)
+          # Regexes go into variables: bash's [[ =~ ]] tokenizer rejects
+          # unquoted parens in an inline regex ("syntax error near token
+          # )"), and quoting the regex would make it a literal string. The
+          # variable-then-unquoted-deref form is the documented escape.
+          re_breaking='^[a-z]+(\([^)]+\))?!:'
+          re_feat='^feat(\([^)]+\))?:'
+          re_fix='^fix(\([^)]+\))?:'
           # Precedence: explicit '!' breaking marker > 'BREAKING CHANGE:'
-          # footer > feat > fix. Anything else (chore/docs/refactor/ci/test
-          # /unconventional subjects) → no release.
+          # footer > feat > fix. Anything else is no-release.
           kind=none
-          if [[ "$subject" =~ ^[a-z]+(\([^)]+\))?!: ]]; then
+          if   [[ "$subject" =~ $re_breaking ]]; then
             kind=major
           elif printf '%s\n' "$COMMIT_MSG" | grep -qE '^BREAKING CHANGE:'; then
             kind=major
-          elif [[ "$subject" =~ ^feat(\([^)]+\))?: ]]; then
+          elif [[ "$subject" =~ $re_feat ]]; then
             kind=minor
-          elif [[ "$subject" =~ ^fix(\([^)]+\))?: ]]; then
+          elif [[ "$subject" =~ $re_fix ]]; then
             kind=patch
           fi
           echo "kind=$kind" >> "$GITHUB_OUTPUT"
