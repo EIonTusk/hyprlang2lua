@@ -58,7 +58,7 @@ func (g *generator) emitDirective(d Directive) {
 		// so '$var' references resolve to locals and '[RULES] cmd' prefixes
 		// get lifted into the hl.exec_cmd rules table, just like exec/exec-once.
 		g.writeln("hl.on(\"hyprland.shutdown\", function()")
-		g.writeln("    " + formatExecCall(d.Value))
+		g.writeln("    " + g.formatExecCall(d.Value, false))
 		g.writeln("end)")
 		g.writeln("")
 		g.translated(1)
@@ -222,7 +222,7 @@ func (g *generator) emitBind(d Directive) {
 	}
 
 	keyExpr := combineModKey(mod, key)
-	dispatchExpr, reason := buildDispatcher(dispatcher, args, g.polyfill)
+	dispatchExpr, reason := g.buildDispatcher(dispatcher, args)
 	if reason != "" {
 		// Emit a best-effort guess as a comment so the user can see exactly
 		// what was attempted, plus the specific reason it couldn't be safely
@@ -230,7 +230,7 @@ func (g *generator) emitBind(d Directive) {
 		// name but bad arguments" matters for the user when iterating live.
 		g.writef("-- TODO: manual review on line %d — %s", d.line, reason)
 		g.flag(d.line, reason)
-		g.writef("-- hl.bind(%s, hl.dsp.%s(%s)%s)", keyExpr, sanitizeDispatcher(dispatcher), joinQuoted(args), formatBindOpts(opts))
+		g.writef("-- hl.bind(%s, hl.dsp.%s(%s)%s)", keyExpr, sanitizeDispatcher(dispatcher), joinQuoted(args, g.declaredVars), formatBindOpts(opts))
 		return
 	}
 
@@ -295,6 +295,13 @@ func normalizeModToken(s string) string {
 // Hyprland's bind key parser treats spaces between modifier names as the
 // same as '+'. We normalize to '+' for consistency with the example, and
 // uppercase any known modifier name since hl.bind is case-sensitive.
+//
+// $X references in the mod position always rewrite to a Lua local, even
+// when not declared in this file — bind keys are not shell-bound, so an
+// undeclared ref is almost always a typo, and emitting `UNDECLARED .. " + K"`
+// gives a clear nil-concat error at config load instead of a silently
+// non-matching bind. Shell-string contexts use [generator.fmtShell] for the
+// opposite behaviour.
 func combineModKey(mod, key string) string {
 	mod = strings.TrimSpace(mod)
 	key = strings.TrimSpace(key)
@@ -307,11 +314,11 @@ func combineModKey(mod, key string) string {
 		key = "code:" + key
 	}
 	if mod == "" {
-		return formatValue(key)
+		return formatValue(key, nil)
 	}
 	modParts := strings.Fields(mod)
 	if len(modParts) == 0 {
-		return formatValue(key)
+		return formatValue(key, nil)
 	}
 	// Bare $var as the entire mod (common case: $mainMod).
 	if len(modParts) == 1 && isDollarRef(modParts[0]) {
@@ -391,10 +398,10 @@ func sanitizeDispatcher(name string) string {
 	return b.String()
 }
 
-func joinQuoted(args []string) string {
+func joinQuoted(args []string, declared map[string]bool) string {
 	parts := make([]string, len(args))
 	for i, a := range args {
-		parts[i] = formatValue(a)
+		parts[i] = formatValue(a, declared)
 	}
 	return strings.Join(parts, ", ")
 }
@@ -452,7 +459,7 @@ func (g *generator) emitMonitor(d Directive) {
 	if len(parts) >= 3 && strings.EqualFold(parts[1], "transform") {
 		g.writeln("hl.monitor({")
 		g.writef("    output = %s,", quoteLuaString(name))
-		g.writef("    transform = %s,", formatValue(parts[2]))
+		g.writef("    transform = %s,", g.fmtVal(parts[2]))
 		g.writeln("})")
 		g.writeln("")
 		g.translated(1)
@@ -464,7 +471,7 @@ func (g *generator) emitMonitor(d Directive) {
 		g.writeln("hl.monitor({")
 		g.writef("    output = %s,", quoteLuaString(name))
 		g.writef("    addreserved = { top = %s, bottom = %s, left = %s, right = %s },",
-			formatValue(parts[2]), formatValue(parts[3]), formatValue(parts[4]), formatValue(parts[5]))
+			g.fmtVal(parts[2]), g.fmtVal(parts[3]), g.fmtVal(parts[4]), g.fmtVal(parts[5]))
 		g.writeln("})")
 		g.writeln("")
 		g.translated(1)
@@ -503,13 +510,13 @@ func (g *generator) emitMonitor(d Directive) {
 			switch kw {
 			case "transform", "bitdepth", "vrr":
 				if i+1 < len(extras) {
-					g.writef("    %s = %s,", kw, formatValue(extras[i+1]))
+					g.writef("    %s = %s,", kw, g.fmtVal(extras[i+1]))
 					i += 2
 					continue
 				}
 			case "sdrbrightness", "sdrsaturation":
 				if i+1 < len(extras) {
-					g.writef("    %s = %s,", kw, formatValue(extras[i+1]))
+					g.writef("    %s = %s,", kw, g.fmtVal(extras[i+1]))
 					i += 2
 					continue
 				}
@@ -573,7 +580,16 @@ func (g *generator) emitMonitorV2Block(s Section) {
 			"sdrbrightness", "sdrsaturation",
 			"sdr_min_luminance", "sdr_max_luminance",
 			"min_luminance", "max_luminance", "max_avg_luminance":
-			add("    %s = %s,", luaTableKey(f.key), formatValue(f.value))
+			add("    %s = %s,", luaTableKey(f.key), g.fmtVal(f.value))
+		case "reserved", "reserved_area":
+			// HL.MonitorSpec.reserved is `integer | HL.CssGap` — same
+			// CSS shorthand as general.gaps_*, so route through the
+			// gap formatter before falling back to a plain string.
+			if expr, ok := formatCssGap(f.value); ok {
+				add("    %s = %s,", luaTableKey(f.key), expr)
+			} else {
+				add("    %s = %s,", luaTableKey(f.key), g.fmtVal(f.value))
+			}
 		default:
 			add("    %s = %s,", luaTableKey(f.key), quoteLuaString(f.value))
 		}
@@ -644,7 +660,7 @@ func (g *generator) emitWorkspace(d Directive) {
 			add("    no_border = true,")
 			continue
 		}
-		add("    %s = %s,", luaTableKey(mapped), formatValue(v))
+		add("    %s = %s,", luaTableKey(mapped), g.fmtVal(v))
 	}
 
 	g.coalesceRule("workspace_rule", "workspace="+name, preamble, actions)
@@ -725,7 +741,7 @@ func (g *generator) emitWindowRuleBlock(s Section) {
 	if len(matches) > 0 {
 		g.writeln("    match = {")
 		for _, m := range matches {
-			g.writef("        %s = %s,", luaTableKey(m.k), formatValue(m.v))
+			g.writef("        %s = %s,", luaTableKey(m.k), g.fmtVal(m.v))
 		}
 		g.writeln("    },")
 	}
@@ -782,7 +798,7 @@ func (g *generator) emitWorkspaceBlock(s Section) {
 				continue
 			}
 		}
-		add("    %s = %s,", luaTableKey(mapped), formatValue(f.value))
+		add("    %s = %s,", luaTableKey(mapped), g.fmtVal(f.value))
 	}
 
 	g.writeln("hl.workspace_rule({")
@@ -865,7 +881,7 @@ func (g *generator) emitLayerRuleBlock(s Section) {
 	if len(matches) > 0 {
 		g.writeln("    match = {")
 		for _, m := range matches {
-			g.writef("        %s = %s,", luaTableKey(m.k), formatValue(m.v))
+			g.writef("        %s = %s,", luaTableKey(m.k), g.fmtVal(m.v))
 		}
 		g.writeln("    },")
 	}
@@ -906,15 +922,15 @@ func emitLayerRuleField(g *generator, rule string, line int, out *[]string) {
 	case r == "xray":
 		add("    xray = true,")
 	case strings.HasPrefix(r, "ignore_alpha "):
-		add("    ignore_alpha = %s,", formatValue(strings.TrimSpace(r[13:])))
+		add("    ignore_alpha = %s,", g.fmtVal(strings.TrimSpace(r[13:])))
 	case strings.HasPrefix(r, "ignorealpha "):
-		add("    ignore_alpha = %s,", formatValue(strings.TrimSpace(r[12:])))
+		add("    ignore_alpha = %s,", g.fmtVal(strings.TrimSpace(r[12:])))
 	case strings.HasPrefix(r, "animation "):
 		add("    animation = %s,", quoteLuaString(strings.TrimSpace(r[10:])))
 	case strings.HasPrefix(r, "order "):
-		add("    order = %s,", formatValue(strings.TrimSpace(r[6:])))
+		add("    order = %s,", g.fmtVal(strings.TrimSpace(r[6:])))
 	case strings.HasPrefix(r, "above_lock "):
-		add("    above_lock = %s,", formatValue(strings.TrimSpace(r[11:])))
+		add("    above_lock = %s,", g.fmtVal(strings.TrimSpace(r[11:])))
 	default:
 		add("    -- TODO: manual review — unmapped layer rule: %q", r)
 		g.flag(line, "layer rule: "+r)
@@ -970,7 +986,7 @@ func (g *generator) emitWindowRule(d Directive, v2 bool) {
 	// level. groupKey serializes the match list so equality is a string
 	// compare; order-preserving on purpose so a user who wrote matchers
 	// in a different order on a second rule won't see surprise merges.
-	preamble := buildMatchPreamble(matches)
+	preamble := buildMatchPreamble(matches, g.declaredVars)
 	groupKey := groupKeyForMatches(matches)
 
 	g.coalesceRule("window_rule", groupKey, preamble, actionLines)
@@ -979,14 +995,16 @@ func (g *generator) emitWindowRule(d Directive, v2 bool) {
 
 // buildMatchPreamble renders a `match = {...},` block (or omits it
 // entirely when matches is empty) at the same indent the legacy emitter
-// used. Returned strings carry no trailing newline.
-func buildMatchPreamble(matches []matchKV) []string {
+// used. Returned strings carry no trailing newline. `declared` is the
+// generator's declared-$var set so any `$X` inside a match value
+// resolves consistently with the rest of the codegen.
+func buildMatchPreamble(matches []matchKV, declared map[string]bool) []string {
 	if len(matches) == 0 {
 		return nil
 	}
 	out := []string{"    match = {"}
 	for _, m := range matches {
-		out = append(out, fmt.Sprintf("        %s = %s,", luaTableKey(m.k), formatValue(m.v)))
+		out = append(out, fmt.Sprintf("        %s = %s,", luaTableKey(m.k), formatValue(m.v, declared)))
 	}
 	out = append(out, "    },")
 	return out
@@ -1255,7 +1273,7 @@ func emitWindowAction(g *generator, action string, line int, out *[]string) {
 			}
 			raw := strings.TrimSpace(a[len(prefix):])
 			if ar.numeric {
-				add("    %s = %s,", ar.field, formatValue(raw))
+				add("    %s = %s,", ar.field, g.fmtVal(raw))
 			} else {
 				add("    %s = %s,", ar.field, quoteLuaString(raw))
 			}
@@ -1285,7 +1303,7 @@ func (g *generator) emitLayerRule(d Directive) {
 	ns := parts[1]
 
 	preamble := []string{
-		fmt.Sprintf("    match = { namespace = %s },", formatValue(ns)),
+		fmt.Sprintf("    match = { namespace = %s },", g.fmtVal(ns)),
 	}
 
 	var actions []string
@@ -1295,7 +1313,23 @@ func (g *generator) emitLayerRule(d Directive) {
 	g.translated(1)
 }
 
-// emitEnv: 'env = KEY,VALUE'. envd similarly but propagates to systemd/dbus.
+// emitEnv translates hyprlang's 'env' / 'envd' directives to hl.env.
+//
+// Per Hyprland's source (src/config/lua/bindings/LuaBindingsConfigRules.cpp),
+// hl.env's signature is `hl.env(name, value, dbus?)`: a third boolean
+// argument controls propagation to systemd's user manager and the D-Bus
+// activation environment (via `systemctl --user import-environment` +
+// `dbus-update-activation-environment --systemd`). Hyprland sets it
+// up automatically when the boolean is true.
+//
+// That matches the 0.54 distinction exactly:
+//   - `env = K, V`   → `hl.env(K, V)`        (no propagation)
+//   - `envd = K, V`  → `hl.env(K, V, true)`  (with propagation)
+//
+// HYPRLAND_NO_SD_VARS = "1" only suppresses Hyprland's OWN internal
+// vars (HYPRLAND_INSTANCE_SIGNATURE etc.); it does NOT make hl.env
+// auto-propagate user values. Hence the explicit dbus arg is necessary
+// to preserve envd's behaviour.
 func (g *generator) emitEnv(d Directive, dbus bool) {
 	parts := splitCommas(d.Value)
 	if len(parts) != 2 {
@@ -1304,33 +1338,71 @@ func (g *generator) emitEnv(d Directive, dbus bool) {
 		return
 	}
 	if dbus {
-		g.writef("-- Note: 'envd' (systemd/D-Bus-propagated) becomes a regular hl.env in Lua. If you relied on D-Bus propagation, set the variable via systemctl --user import-environment as a separate step.")
+		g.writef("hl.env(%s, %s, true)", quoteLuaString(parts[0]), quoteLuaString(parts[1]))
+	} else {
+		g.writef("hl.env(%s, %s)", quoteLuaString(parts[0]), quoteLuaString(parts[1]))
 	}
-	g.writef("hl.env(%s, %s)", quoteLuaString(parts[0]), quoteLuaString(parts[1]))
 	g.translated(1)
 }
 
 // emitSource: 'source = path.conf'.
 //
-// Decision: we emit a 'require("...")' call with the path stripped of its
-// extension and reduced to a single module name; we also include a comment
-// explaining that the sourced .conf file must itself be converted to Lua.
+// Two shapes:
 //
-// Reasoning: Lua's natural include mechanism is require(); it integrates
-// with package.path and gives users the same modularity they had in hyprlang.
-// We do *not* inline-expand because it bloats output and loses the user's
-// modular organization. We do not use dofile() because it doesn't go through
-// package.path and would force the user to deal with relative paths.
+//  1. Literal path → 'require("module.name")'. Lua's natural include
+//     mechanism integrates with package.path, preserves the user's
+//     modular structure, and avoids the relative-path issues that
+//     dofile() would force.
+//  2. Glob path ('*', '?', '['): require() can't glob, so when polyfill
+//     is enabled we emit hl_source_glob(path-with-conf-swapped-to-lua),
+//     which shell-expands the pattern at runtime and dofile()s each
+//     match. With polyfill OFF the glob is flagged for manual review
+//     since there is no static Lua call that preserves the semantic.
+//
+// In both cases a comment reminds the user that the sourced .conf files
+// must themselves be converted to Lua before they'll load.
 func (g *generator) emitSource(d Directive) {
 	p := strings.TrimSpace(d.Value)
 	if p == "" {
 		g.flag(d.line, "empty source")
 		return
 	}
+	if strings.ContainsAny(p, "*?[") {
+		if !g.polyfill {
+			g.flag(d.line, "source glob requires polyfill")
+			g.writef("-- TODO: manual review — glob source %q has no static Lua require() form. Enable --polyfill to emit hl_source_glob, or expand the glob manually.", p)
+			return
+		}
+		g.neededPolyfills["source_glob"] = true
+		luaPattern := swapConfToLua(p)
+		g.writef("-- Source: %s (glob; resolved at runtime). Each matched .conf must be converted to .lua.", p)
+		g.writef("hl_source_glob(%s)", quoteLuaString(luaPattern))
+		g.translated(1)
+		return
+	}
 	mod := moduleNameFor(p)
 	g.writef("-- Source: %s — convert this file to Lua and ensure it is on Lua's package.path.", p)
 	g.writef("require(%s)", quoteLuaString(mod))
 	g.translated(1)
+}
+
+// swapConfToLua replaces a trailing '.conf' on each path component of
+// `p` with '.lua' so the runtime glob looks for the user's converted
+// files. Split-by-'/' before replacing because a naive global
+// ReplaceAll mangles directory names that happen to contain the
+// substring (e.g. `~/.config/hypr/conf.d/*.conf` would turn into
+// `~/.luaig/hypr/conf.d/*.lua`).
+func swapConfToLua(p string) string {
+	if !strings.Contains(p, ".conf") {
+		return p
+	}
+	parts := strings.Split(p, "/")
+	for i, part := range parts {
+		if strings.HasSuffix(part, ".conf") {
+			parts[i] = strings.TrimSuffix(part, ".conf") + ".lua"
+		}
+	}
+	return strings.Join(parts, "/")
 }
 
 // moduleNameFor turns a hyprlang 'source =' path into a Lua module name
@@ -1416,29 +1488,38 @@ func sanitizeModuleComponent(s string) string {
 	return b.String()
 }
 
-// emitSubmap: 'submap = NAME' opens a submap; 'submap = reset' closes it.
+// emitSubmap: 'submap = NAME' opens a submap; 'submap = reset' closes
+// it. The Lua API uses a callback-scoped form (hl.define_submap("name",
+// function() ... end)) rather than hyprlang's stateful global mode, so
+// the converter buffers every bind* between the markers in g.submap and
+// flushes it as one hl.define_submap call.
 //
-// In hyprlang, binds between 'submap = name' and 'submap = reset' belong to
-// that submap. We don't have side-by-side ordering with bind directives in
-// this simple top-level approach, so we emit a TODO that points users at
-// hl.define_submap. The Lua API supports a more elegant form anyway:
+// Three cases:
 //
-//   hl.define_submap("resize", function()
-//       hl.bind(...)
-//   end)
-//
-// We can't easily fold raw inline submap state at this point without doing a
-// preprocessing pass — defer that to a future improvement and flag instead,
-// so users see exactly what the right rewrite is.
+//   - 'submap = NAME' with no prior submap: start a fresh buffer.
+//   - 'submap = NAME' while another is in flight: flush the prior (hyprlang
+//     allows back-to-back submaps without an explicit reset), then start.
+//   - 'submap = reset': flush the in-flight buffer. If there's no buffer,
+//     fall back to a comment so source order stays inspectable.
 func (g *generator) emitSubmap(d Directive) {
 	name := strings.TrimSpace(d.Value)
 	if strings.EqualFold(name, "reset") {
+		if g.submap != nil {
+			g.flushSubmap()
+			g.translated(1)
+			return
+		}
 		g.writeln("-- (end of submap block)")
 		g.passthrough()
 		return
 	}
-	g.flag(d.line, "submap requires manual conversion")
-	g.writef("-- TODO: manual review — wrap the following binds in hl.define_submap(%s, function() ... end). The next 'submap = reset' closes the block.", quoteLuaString(name))
+	if g.submap != nil {
+		// Back-to-back 'submap = X' without an intervening reset: flush
+		// the prior block and start a new one.
+		g.flushSubmap()
+	}
+	g.submap = &submapBuf{name: name, line: d.line}
+	g.translated(1)
 }
 
 // emitAnimation: 'animation = NAME, ON, SPEED, BEZIER[, STYLE]'
@@ -1458,7 +1539,7 @@ func (g *generator) emitAnimation(d Directive) {
 		g.writef("    enabled = %s,", enabled)
 	}
 	if len(parts) > 2 && parts[2] != "" {
-		g.writef("    speed = %s,", formatValue(parts[2]))
+		g.writef("    speed = %s,", g.fmtVal(parts[2]))
 	}
 	if len(parts) > 3 && parts[3] != "" {
 		g.writef("    bezier = %s,", quoteLuaString(parts[3]))
@@ -1478,8 +1559,8 @@ func (g *generator) emitBezier(d Directive) {
 		return
 	}
 	g.writef("hl.curve(%s, { type = \"bezier\", points = { { %s, %s }, { %s, %s } } })",
-		quoteLuaString(parts[0]), formatValue(parts[1]), formatValue(parts[2]),
-		formatValue(parts[3]), formatValue(parts[4]))
+		quoteLuaString(parts[0]), g.fmtVal(parts[1]), g.fmtVal(parts[2]),
+		g.fmtVal(parts[3]), g.fmtVal(parts[4]))
 	g.translated(1)
 }
 
@@ -1491,7 +1572,7 @@ func (g *generator) emitGesture(d Directive) {
 		return
 	}
 	g.writeln("hl.gesture({")
-	g.writef("    fingers = %s,", formatValue(parts[0]))
+	g.writef("    fingers = %s,", g.fmtVal(parts[0]))
 	g.writef("    direction = %s,", quoteLuaString(parts[1]))
 	g.writef("    action = %s,", quoteLuaString(parts[2]))
 	for _, extra := range parts[3:] {

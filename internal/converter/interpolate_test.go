@@ -41,12 +41,51 @@ func TestInterpolate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, ok := interpolate(tc.in)
+			// Passing nil for `declared` preserves the legacy "rewrite every
+			// $X as a Lua local" behaviour these cases were written against.
+			got, ok := interpolate(tc.in, nil)
 			if ok != tc.ok {
 				t.Fatalf("ok = %v, want %v (got expr %q)", ok, tc.ok, got)
 			}
 			if ok && got != tc.want {
 				t.Errorf("interpolate(%q):\n  got:  %s\n  want: %s", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestInterpolate_DeclaredSet exercises the declared-aware path: only refs
+// in the set rewrite to a Lua local, undeclared refs survive as literal
+// text in the surrounding string (so a downstream /bin/sh -c gets the raw
+// $HOME / $XDG_* sigil and expands it at runtime).
+func TestInterpolate_DeclaredSet(t *testing.T) {
+	decls := map[string]bool{"mainMod": true, "terminal": true}
+	cases := []struct {
+		name string
+		in   string
+		want string
+		ok   bool
+	}{
+		{"declared rewrites", "$mainMod + SHIFT",
+			`mainMod .. " + SHIFT"`, true},
+		{"undeclared preserved", "echo $HOME",
+			``, false},
+		{"mix declared and env", "echo $HOME from $mainMod",
+			`"echo $HOME from " .. mainMod`, true},
+		{"declared then env tail", "$terminal --workdir=$HOME",
+			`terminal .. " --workdir=$HOME"`, true},
+		{"only env refs → no rewrite",
+			"systemctl --user start $XDG_CURRENT_DESKTOP",
+			``, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := interpolate(tc.in, decls)
+			if ok != tc.ok {
+				t.Fatalf("ok = %v, want %v (got expr %q)", ok, tc.ok, got)
+			}
+			if ok && got != tc.want {
+				t.Errorf("interpolate(%q, decls):\n  got:  %s\n  want: %s", tc.in, got, tc.want)
 			}
 		})
 	}

@@ -98,8 +98,18 @@ type Options struct {
 	//     variants): percent inputs are rejected outright when OFF (the typed
 	//     resize/move table only accepts numeric pixels), and resolved at
 	//     dispatch time against the active/target window or monitor when ON.
-	// Future hyprlang features that need a runtime lookup should opt in
-	// through this same flag rather than introducing one knob per feature.
+	//   - 'source = pattern/*.conf' (globbing): require() can't glob, so
+	//     a runtime helper shell-expands and dofile()s each match.
+	//
+	// Other migrations use native typed-API forms or inline closures, so
+	// no preamble helper is needed:
+	//   - envd → hl.env(K, V, true) — third arg is the dbus boolean
+	//     (per Hyprland source: src/config/lua/bindings/LuaBindingsConfigRules.cpp)
+	//   - execr-once → hl.dispatch(hl.dsp.exec_raw(cmd))
+	//   - focusworkspaceoncurrentmonitor → hl.dsp.focus({on_current_monitor=true})
+	//   - movecurrentworkspacetomonitor → inline closure resolving
+	//     hl.get_active_workspace().id at dispatch time
+	//   - loadconfig → inline `function() hl.exec_cmd("hyprctl reload") end`
 	Polyfill bool
 }
 

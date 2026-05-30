@@ -52,7 +52,8 @@ func TestBuildDispatcher_ResizeMove(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, reason := buildDispatcher(tc.disp, tc.args, false)
+			g := newGenerator(Options{})
+			got, reason := g.buildDispatcher(tc.disp, tc.args)
 			if tc.wantFail {
 				if reason == "" {
 					t.Fatalf("expected failure but got expr %q", got)
@@ -109,7 +110,8 @@ func TestBuildDispatcher_ResizeMovePolyfill(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, reason := buildDispatcher(tc.disp, tc.args, true)
+			g := newGenerator(Options{Polyfill: true})
+			got, reason := g.buildDispatcher(tc.disp, tc.args)
 			if tc.wantFail {
 				if reason == "" {
 					t.Fatalf("expected failure but got expr %q", got)
@@ -143,18 +145,25 @@ func TestBuildDispatcher_WorkspaceAndFullscreen(t *testing.T) {
 			`hl.dsp.window.move({ workspace = "special:magic", follow = false })`, false},
 
 		// fullscreen dispatcher maps numeric arg to mode string.
+		// fullscreen now always emits action="toggle" explicitly because
+		// 0.54's default for `fullscreen` was toggle, and 0.55's default
+		// isn't documented in the wiki — preserving the 0.54 behaviour
+		// avoids a silent semantic shift.
 		{"fullscreen no arg", "fullscreen", nil,
-			`hl.dsp.window.fullscreen({ mode = "fullscreen" })`, false},
+			`hl.dsp.window.fullscreen({ mode = "fullscreen", action = "toggle" })`, false},
 		{"fullscreen 0 = fullscreen", "fullscreen", []string{"0"},
-			`hl.dsp.window.fullscreen({ mode = "fullscreen" })`, false},
+			`hl.dsp.window.fullscreen({ mode = "fullscreen", action = "toggle" })`, false},
 		{"fullscreen 1 = maximized", "fullscreen", []string{"1"},
-			`hl.dsp.window.fullscreen({ mode = "maximized" })`, false},
+			`hl.dsp.window.fullscreen({ mode = "maximized", action = "toggle" })`, false},
+		// togglefullscreen now passes action="toggle" so the typed API
+		// flips the state instead of unconditionally entering fullscreen.
 		{"togglefullscreen", "togglefullscreen", nil,
-			`hl.dsp.window.fullscreen({ mode = "fullscreen" })`, false},
+			`hl.dsp.window.fullscreen({ mode = "fullscreen", action = "toggle" })`, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, reason := buildDispatcher(tc.disp, tc.args, false)
+			g := newGenerator(Options{})
+			got, reason := g.buildDispatcher(tc.disp, tc.args)
 			if tc.wantFail {
 				if reason == "" {
 					t.Fatalf("expected failure but got expr %q", got)
