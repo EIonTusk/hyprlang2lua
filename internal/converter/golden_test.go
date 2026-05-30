@@ -52,8 +52,14 @@ func TestGolden(t *testing.T) {
 			opts     Options
 			goldFile string
 		}{
+			// `default` is the package-zero baseline — strict, no merge,
+			// no polyfill — so the golden documents exactly what a bare
+			// embedder gets without opting into anything.
 			{"default", Options{}, filepath.Join("testdata", base+".lua")},
-			{"merged", Options{MergeCalls: true}, filepath.Join("testdata", base+".merged.lua")},
+			// `merged` mirrors the CLI / web-UI production defaults:
+			// MergeCalls=true and Polyfill=true. Anything a typical user
+			// will see in their generated file is captured here.
+			{"merged", Options{MergeCalls: true, Polyfill: true}, filepath.Join("testdata", base+".merged.lua")},
 		}
 		for _, tc := range cases {
 			t.Run(base+"/"+tc.label, func(t *testing.T) {

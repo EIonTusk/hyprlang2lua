@@ -114,7 +114,11 @@ func TestSmoke(t *testing.T) {
 // Hyprland's Lua hl.bind() only accepts uppercase. Mixed-case input must be
 // normalized in the generated bind call.
 func TestModifierCaseNormalization(t *testing.T) {
-	src := `bind = shift, PRINT, exec, hyprshot
+	// $mainMod is declared so the mixed-case + variable case below still
+	// resolves to a Lua local concat; undeclared $X would now be preserved
+	// as literal text per the env-var fallback rule (see TestEnvVarFallback).
+	src := `$mainMod = SUPER
+bind = shift, PRINT, exec, hyprshot
 bindel = shift SUPER, 201, exec, foo
 bind = ctrl alt, t, exec, kitty
 bind = $mainMod shift, X, exec, bar

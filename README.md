@@ -81,7 +81,7 @@ Flags:
 | `-r, --report`            | print `translated / passthrough / flagged / coverage%` to stderr    |
 | `-c, --check`             | exit code `3` if any directive was flagged for manual review        |
 | `    --no-merge`          | emit a separate `hl.X(...)` call per source line instead of merging mergeable APIs into one call. Merging is on by default and currently applies to `hl.config` — in practice it folds every per-section `hl.config({...})` into one call, with section-separating comments preserved inside the merged table. Other `hl.*` APIs (bind, window_rule, monitor, env, device, …) take one spec per call by design and pass through unchanged. |
-| `    --no-polyfill`       | disable runtime Lua helper closures used to preserve hyprlang features without a direct Hyprland 0.55 typed-API equivalent (currently: percent-form `resizeactive`/`moveactive`). Polyfill is on by default; passing this flag forces strict output and flags any such feature for manual review instead. |
+| `    --no-polyfill`       | disable runtime Lua helper closures used to preserve hyprlang features without a direct Hyprland 0.55 typed-API equivalent (currently: percent-form `resizeactive`/`moveactive`, source globbing). Polyfill is on by default; passing this flag forces strict output and flags any such feature for manual review instead. |
 | `    --hoist-vars`        | move every `$var = ...` rewrite into a single block at the top of the output instead of emitting each `local` in source position |
 | `-s, --strip-comments`    | drop comments from the output (`-- TODO: manual review` markers from flagged directives are kept) |
 
@@ -123,22 +123,67 @@ Exit codes: `0` success, `1` I/O or conversion error, `2` usage/flag error,
   with Lua's `package.path` and preserves the user's modular structure;
   `dofile()` would force relative paths, and inline-expansion would bloat
   output and discard organization.
-- `submap = name` / `submap = reset` — these define stateful blocks of binds
-  in hyprlang. The Lua API expects a callback (`hl.define_submap("name",
-  function() hl.bind(...) end)`), which requires reordering the source. The
-  converter emits a TODO at the `submap =` line so users can wrap the
-  following block by hand.
+- `source = pattern/*.conf` (glob) → `hl_source_glob("pattern/*.lua")` when
+  `--polyfill` is on. The runtime helper shell-expands the pattern via `ls`
+  and `dofile`s each match. With `--no-polyfill` the directive is flagged.
+- `submap = name` / `submap = reset` — bind directives between the two
+  markers are buffered and emitted as a single `hl.define_submap("name",
+  function() ... end)` block. Non-bind statements inside the block flush
+  the buffer first, so source order survives even on weird input.
 - `plugin { name { ... } }` — plugin sections are passed through as a Lua
   comment block with a TODO, since each plugin exposes its own keys under
   `hl.plugin.<name>` and we can't safely guess the API.
-- `envd` is converted to `hl.env(...)`; the systemd/D-Bus propagation that
-  `envd` provided needs to be replicated outside Lua.
+- `env = K, V` → `hl.env(K, V)` (no propagation). `envd = K, V` →
+  `hl.env(K, V, true)` — `hl.env`'s third arg is the `dbus` boolean per
+  Hyprland source (`src/config/lua/bindings/LuaBindingsConfigRules.cpp`):
+  when true, hyprland calls `systemctl --user import-environment` and
+  `dbus-update-activation-environment --systemd` for that variable.
+- `execr-once = cmd` → `hl.dispatch(hl.dsp.exec_raw(cmd))` inside the
+  `hyprland.start` hook. `exec_raw` is the native dispatcher per the
+  [Dispatchers wiki](https://wiki.hypr.land/Configuring/Basics/Dispatchers/):
+  "execute a raw command. While exec_cmd will do sh -c, this won't."
+- Undeclared `$VAR` inside exec strings — preserved verbatim in the emitted
+  Lua string so the downstream `/bin/sh -c` expansion still sees the sigil
+  (the same fallback hyprlang uses for `$HOME` / `$XDG_*`). Undeclared `$X`
+  in non-shell contexts (bind keys, config values, dispatcher table fields)
+  still rewrites to a Lua local so the missing declaration surfaces as a
+  clear load-time error instead of a silently non-matching bind.
+- CSS-shorthand gap values (`gaps_in = 5 10 15 20`, etc.) — parsed into the
+  typed `HL.CssGap` table `{ top, right, bottom, left }` per CSS box-shorthand
+  rules. Applies to `general.gaps_in / gaps_out / float_gaps` and
+  `monitorv2`'s `reserved` / `reserved_area`.
 - Percent-form `resizeactive` / `moveactive` (e.g. `resizeactive 10% 5%`) and
   the `*windowpixel` / `exact` variants. The 0.55 typed dispatch API only
   accepts numeric pixels, so the converter emits a small runtime closure that
   resolves the percent at dispatch time against the active window or monitor
   and then calls `hl.dispatch(...)`. Disable with `--no-polyfill` to flag
   these instead.
+- Dispatchers that moved to typed-table form in 0.55 — all mapped to
+  their typed-table equivalents per the official wiki, with per-arg
+  splitting where the 0.54 form packed multiple fields into one space-
+  separated string: `signal`, `signalwindow`, `setprop` (`WIN PROP VAL [lock]`),
+  `tagwindow` (`TAG [WIN]`), `alterzorder` (`MODE[,WIN]`),
+  `fullscreenstate` (`INTERNAL CLIENT [ACTION]`), `fakefullscreen` /
+  `togglefakefullscreen`, `lockactivegroup`, `lockgroups`,
+  `denywindowfromgroup`, `changegroupactive`, `moveintogroup`,
+  `moveoutofgroup` (WINDOW selector, not direction), `movewindoworgroup`,
+  `movegroupwindow`, `cyclenext`, `swapnext`, `swapwindow`,
+  `renameworkspace`, `moveworkspacetomonitor`, `swapactiveworkspaces`,
+  `focusworkspaceoncurrentmonitor`. Legacy action vocabularies
+  (`f`/`b`, `on`/`off`, `1`/`0`) translate to the new string forms
+  (`next()`/`prev()`, `set`/`unset`, `lock`/`unlock`).
+- `killactive` → `close()` (graceful, despite the name); `closewindow SEL`
+  → `close(SEL)`; `killwindow SEL` → `kill(SEL)` (actually SIGKILL per
+  the 0.54 wiki); `forcekillactive` → `kill()`.
+- `movecurrentworkspacetomonitor MON` → inline closure resolving
+  `hl.get_active_workspace().id` and dispatching `workspace.move({workspace, monitor=MON})`.
+- `loadconfig` → inline `function() hl.exec_cmd("hyprctl reload") end`.
+  No dispatcher equivalent in 0.55+; the one-liner makes a helper
+  preamble unnecessary.
+- `bind = ..., exec, hyprctl dispatch X args` — detected and rewritten to
+  the direct `hl.dsp.*` call so the bind doesn't pay an `exec` per keypress.
+  Other `hyprctl` subcommands (`reload`, `keyword`, `notify`, …) stay as
+  literal `hl.dsp.exec_cmd` calls.
 
 Anything not in either list is preserved with a `-- TODO: manual review`
 comment, contributes to `flagged` in the report, and trips `--check`.
