@@ -328,11 +328,23 @@ Use the [Conventional Commits](https://www.conventionalcommits.org) format:
 | commit body contains `BREAKING CHANGE:`      | major   |
 | `chore:` / `docs:` / `refactor:` / `ci:` / `test:` / non-conventional | no release |
 
-When a release-triggering commit lands on master, the workflow tags the
-version, regenerates `packaging/aur/PKGBUILD` + `.SRCINFO`, bumps
-`flake.nix`, fixes up a stale `vendorHash` if needed, opens a GitHub
+When a release-triggering commit lands on master, the workflow bumps
+`flake.nix` (fixing up a stale `vendorHash` if needed), commits that, tags
+it, then regenerates `packaging/aur/PKGBUILD` + `.SRCINFO`, opens a GitHub
 Release, and pushes to the AUR. None of that requires anything from you —
 just title the PR correctly.
+
+That order is deliberate, and it lands two `[skip ci]` commits per release
+rather than one. The flake bump has to precede the tag, or the tag would
+carry the previous `version` and `nix run github:…/vX.Y.Z` would build a
+derivation labelled with the *preceding* release (the behaviour through
+v0.7.0). The PKGBUILD bump cannot precede it: `sha256sums` is the checksum
+of the tagged tree's own archive, so it can never live inside that tree.
+The in-tree PKGBUILD therefore always describes the release just cut and
+lands one commit after it — harmless, since the AUR consumes the copy
+pushed to the AUR remote, not the one in the tag. Bumping the flake first
+also means a broken Nix build aborts with no tag pushed, instead of leaving
+an orphan tag behind.
 
 If a release fails or you need an out-of-band cut, dispatch the workflow
 manually from the **Actions** tab → *release-on-merge* → *Run workflow* and

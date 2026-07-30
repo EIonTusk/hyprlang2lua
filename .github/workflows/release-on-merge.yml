@@ -28,17 +28,36 @@ name: release-on-merge
 # What it does, in order:
 #   - Reads the head commit subject and maps the conventional-commit type
 #     to a semver bump.
-#   - Tags master HEAD with the next version.
+#   - Bumps flake.nix's `version`, then verifies the Nix build; if vendorHash
+#     is stale, rewrites it from the hash-mismatch error and re-verifies.
+#   - Commits that bump to master with [skip ci]  <-- BEFORE tagging.
+#   - Tags THAT commit with the next version.
 #   - Waits for GitHub to materialize archive/<tag>.tar.gz.
-#   - Bumps packaging/aur/PKGBUILD (pkgver, pkgrel=1, sha256sums).
-#   - Regenerates packaging/aur/.SRCINFO via `makepkg --printsrcinfo`
-#     inside an archlinux container (matches MAINTAINING.md step 3).
-#   - Bumps flake.nix's `version`.
-#   - Verifies the Nix build; if vendorHash is stale, rewrites it from
-#     the hash-mismatch error and re-verifies.
-#   - Commits the packaging bump to master with [skip ci].
+#   - Bumps packaging/aur/PKGBUILD (pkgver, pkgrel=1, sha256sums) and
+#     regenerates packaging/aur/.SRCINFO via `makepkg --printsrcinfo` inside
+#     an archlinux container (matches MAINTAINING.md step 3).
+#   - Commits the AUR packaging bump to master with [skip ci].
 #   - Creates a GitHub Release with auto-generated notes.
 #   - Pushes the PKGBUILD + .SRCINFO to the AUR git remote.
+#
+# Why the version bump straddles the tag (two commits, not one):
+#
+#   flake.nix's `version` is a plain label with no dependency on the release
+#   artifact, so it must be committed BEFORE the tag — otherwise the tag
+#   contains the previous version and `nix run github:owner/repo/vX.Y.Z`
+#   builds a derivation labelled with the *preceding* release. That was the
+#   behaviour up to v0.7.0.
+#
+#   PKGBUILD's `sha256sums` cannot move before the tag: it is the checksum of
+#   `archive/v$pkgver.tar.gz`, i.e. of the tagged tree itself, so a PKGBUILD
+#   inside that tree can never carry its own archive's hash. MAINTAINING.md
+#   step 2 records the same constraint ("requires the tag to already exist").
+#   The in-tree PKGBUILD therefore always describes the release that was just
+#   cut and lands one commit after it. This is harmless: the AUR consumes the
+#   copy pushed to the AUR git remote below, never the one inside the tag.
+#
+#   Bumping the flake before the tag also means a broken Nix build aborts the
+#   run with no tag pushed, instead of leaving an orphan tag with no release.
 #
 # Manual cut: trigger via the Actions tab (workflow_dispatch) — pick patch /
 # minor / major. Useful for retries or out-of-band releases.
@@ -128,7 +147,50 @@ jobs:
           echo "ver=${maj}.${min}.${pat}" >> "$GITHUB_OUTPUT"
           echo "Next version: $TAG"
 
-      - name: Tag release
+      - name: Install Nix
+        if: steps.bump.outputs.kind != 'none'
+        uses: cachix/install-nix-action@v27
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Bump flake.nix version
+        if: steps.bump.outputs.kind != 'none'
+        env:
+          VER: ${{ steps.ver.outputs.ver }}
+        run: |
+          set -euo pipefail
+          sed -i -E "s/^( *)version = \"[^\"]*\";/\1version = \"$VER\";/" flake.nix
+          echo "--- flake.nix diff ---"
+          git diff -- flake.nix
+
+      - name: Verify Nix build (auto-fix vendorHash if go.sum changed)
+        if: steps.bump.outputs.kind != 'none'
+        run: |
+          set -euo pipefail
+          if nix build .#default --no-link 2> /tmp/nix.log; then
+            echo "Nix build OK, vendorHash unchanged."
+            exit 0
+          fi
+          if ! grep -q 'hash mismatch' /tmp/nix.log; then
+            echo "Nix build failed for a non-hash reason:" >&2
+            cat /tmp/nix.log >&2
+            exit 1
+          fi
+          NEWHASH=$(grep -E '^\s*got:\s+sha256-' /tmp/nix.log | head -n1 | awk '{print $2}')
+          if [ -z "$NEWHASH" ]; then
+            echo "Could not parse new hash from nix output:" >&2
+            cat /tmp/nix.log >&2
+            exit 1
+          fi
+          echo "Updating vendorHash to $NEWHASH"
+          sed -i -E "s|vendorHash = \"[^\"]*\";|vendorHash = \"$NEWHASH\";|" flake.nix
+          nix build .#default --no-link
+
+      # Must land before the tag so `nix run github:owner/repo/vX.Y.Z` reports
+      # X.Y.Z rather than the preceding release. Unlike the PKGBUILD bump
+      # below, nothing here depends on the tag existing.
+      - name: Commit flake version bump
         if: steps.bump.outputs.kind != 'none'
         env:
           TAG: ${{ steps.ver.outputs.tag }}
@@ -136,8 +198,25 @@ jobs:
           set -euo pipefail
           git config user.name  'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add flake.nix
+          if git diff --cached --quiet; then
+            echo "flake.nix already at $TAG — nothing to commit."
+          else
+            git commit -m "chore(release): $TAG [skip ci]"
+            git push origin master
+          fi
+
+      # Tags whatever master HEAD now is — i.e. the flake bump above when there
+      # was one, so the tagged tree self-reports the version being released.
+      - name: Tag release
+        if: steps.bump.outputs.kind != 'none'
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          set -euo pipefail
           git tag -a "$TAG" -m "$TAG"
           git push origin "$TAG"
+          echo "Tagged $(git rev-parse --short HEAD): $(git log -1 --pretty=%s)"
 
       - name: Wait for archive tarball
         if: steps.bump.outputs.kind != 'none'
@@ -180,58 +259,20 @@ jobs:
           echo "--- .SRCINFO diff ---"
           git diff -- packaging/aur/.SRCINFO
 
-      - name: Bump flake.nix version
-        if: steps.bump.outputs.kind != 'none'
-        env:
-          VER: ${{ steps.ver.outputs.ver }}
-        run: |
-          set -euo pipefail
-          sed -i -E "s/^( *)version = \"[^\"]*\";/\1version = \"$VER\";/" flake.nix
-          echo "--- flake.nix diff ---"
-          git diff -- flake.nix
-
-      - name: Install Nix
-        if: steps.bump.outputs.kind != 'none'
-        uses: cachix/install-nix-action@v27
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-
-      - name: Verify Nix build (auto-fix vendorHash if go.sum changed)
-        if: steps.bump.outputs.kind != 'none'
-        run: |
-          set -euo pipefail
-          if nix build .#default --no-link 2> /tmp/nix.log; then
-            echo "Nix build OK, vendorHash unchanged."
-            exit 0
-          fi
-          if ! grep -q 'hash mismatch' /tmp/nix.log; then
-            echo "Nix build failed for a non-hash reason:" >&2
-            cat /tmp/nix.log >&2
-            exit 1
-          fi
-          NEWHASH=$(grep -E '^\s*got:\s+sha256-' /tmp/nix.log | head -n1 | awk '{print $2}')
-          if [ -z "$NEWHASH" ]; then
-            echo "Could not parse new hash from nix output:" >&2
-            cat /tmp/nix.log >&2
-            exit 1
-          fi
-          echo "Updating vendorHash to $NEWHASH"
-          sed -i -E "s|vendorHash = \"[^\"]*\";|vendorHash = \"$NEWHASH\";|" flake.nix
-          nix build .#default --no-link
-
-      - name: Commit packaging bump
+      # Necessarily after the tag: sha256sums is the checksum of the tagged
+      # tree's own archive, so it cannot be part of that tree. See the header.
+      - name: Commit AUR packaging bump
         if: steps.bump.outputs.kind != 'none'
         env:
           TAG: ${{ steps.ver.outputs.tag }}
         run: |
           set -euo pipefail
-          git add packaging/aur/PKGBUILD packaging/aur/.SRCINFO flake.nix
+          git add packaging/aur/PKGBUILD packaging/aur/.SRCINFO
           if git diff --cached --quiet; then
-            echo "Nothing to commit — packaging files already up to date."
+            echo "Nothing to commit — AUR packaging already up to date."
             exit 0
           fi
-          git commit -m "ci: bump packaging to $TAG [skip ci]"
+          git commit -m "ci: bump AUR packaging to $TAG [skip ci]"
           git push origin master
 
       - name: Create GitHub Release
