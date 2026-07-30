@@ -1583,13 +1583,21 @@ func (g *generator) emitGesture(d Directive) {
 }
 
 func (g *generator) emitPermission(d Directive) {
-	// 'permission = REGEX, TYPE, ALLOW|DENY'
+	// 'permission = REGEX, TYPE, ALLOW|DENY|ASK'
+	//
+	// The third positional is the *mode*, and HL.PermissionSpec spells that
+	// field `mode` — not `allow`. hlPermission requires all three
+	// (tableOptStr binary/type/mode) and rejects the table outright with
+	// "hl.permission: expected { binary, type, mode }" if any is missing, so
+	// an `allow =` key silently drops the mode and fails the whole call at
+	// config load. `binary` also accepts `target` as an alias; we emit the
+	// documented spelling.
 	parts := splitCommas(d.Value)
 	if len(parts) != 3 {
 		g.flag(d.line, "malformed permission: "+d.Value)
 		return
 	}
-	g.writef("hl.permission({ binary = %s, type = %s, allow = %s })",
+	g.writef("hl.permission({ binary = %s, type = %s, mode = %s })",
 		quoteLuaString(parts[0]), quoteLuaString(parts[1]), quoteLuaString(parts[2]))
 	g.translated(1)
 }

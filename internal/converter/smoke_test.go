@@ -681,3 +681,30 @@ func TestMonitorV2LuminanceFields(t *testing.T) {
 		}
 	}
 }
+
+// TestPermissionModeField pins the HL.PermissionSpec field name. hlPermission
+// reads binary/type/**mode** and rejects the whole table with
+// "hl.permission: expected { binary, type, mode }" if any is missing, so an
+// `allow =` key silently drops the mode and fails the call at config load.
+// This was wrong for every permission directive until it was caught by running
+// generated output through a real Hyprland's --verify-config.
+func TestPermissionModeField(t *testing.T) {
+	for _, mode := range []string{"allow", "deny", "ask"} {
+		src := "permission = /usr/bin/grim, screencopy, " + mode + "\n"
+		out, rpt, err := Convert(src)
+		if err != nil {
+			t.Fatalf("Convert: %v", err)
+		}
+		want := `hl.permission({ binary = "/usr/bin/grim", type = "screencopy", mode = ` +
+			`"` + mode + `" })`
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+		if strings.Contains(out, "allow = ") {
+			t.Errorf("emitted an 'allow =' key; HL.PermissionSpec declares 'mode':\n%s", out)
+		}
+		if rpt.Flagged != 0 {
+			t.Errorf("unexpected flags for mode %q: %d", mode, rpt.Flagged)
+		}
+	}
+}

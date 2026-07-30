@@ -27,7 +27,7 @@ hl.gesture({
     action = "workspace",
 })
 
-hl.permission({ binary = "/usr/(bin|local/bin)/grim", type = "screencopy", allow = "allow" })
+hl.permission({ binary = "/usr/(bin|local/bin)/grim", type = "screencopy", mode = "allow" })
 hl.config({
     general = {
         gaps_in = 7,

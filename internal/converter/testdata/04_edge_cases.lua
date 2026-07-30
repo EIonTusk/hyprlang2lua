@@ -35,4 +35,4 @@ hl.gesture({
 })
 
 -- Permissions.
-hl.permission({ binary = "/usr/(bin|local/bin)/grim", type = "screencopy", allow = "allow" })
+hl.permission({ binary = "/usr/(bin|local/bin)/grim", type = "screencopy", mode = "allow" })
