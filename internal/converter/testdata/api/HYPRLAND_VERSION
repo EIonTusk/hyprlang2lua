@@ -1,0 +1,4 @@
+# The Hyprland release that testdata/api/*.txt were extracted from.
+# TestHyprlandVerifyConfig skips unless HYPRLAND_BIN reports a matching
+# major.minor, so an older local install cannot produce spurious failures.
+0.56.1

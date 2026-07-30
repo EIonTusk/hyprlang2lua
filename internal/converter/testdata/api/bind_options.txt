@@ -1,0 +1,21 @@
+# Generated from Hyprland v0.56.1 by meta/generateLuaStubs.py, then
+# extracted from the HL.BindOptions class of the resulting hl.meta.lua.
+# This is the pinned API surface TestAPISurface checks emitted output
+# against. Regenerate when retargeting a new Hyprland release; the
+# resulting diff is the list of config keys that moved.
+# Lines starting with '#' and blank lines are ignored.
+allow_input_capture
+click
+desc
+description
+device
+dont_inhibit
+drag
+ignore_mods
+locked
+long_press
+non_consuming
+release
+repeating
+submap_universal
+transparent
