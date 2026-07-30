@@ -1,9 +1,15 @@
 name: test
 
+# workflow_dispatch is here so a commit that lands with no CI signal can be
+# re-checked from the Actions tab without rewriting history. That happens more
+# easily than you'd think: GitHub scans the *entire* commit message for the
+# CI-skip token, body included, so merely writing about the token in a commit
+# body suppresses every workflow for that commit.
 on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
