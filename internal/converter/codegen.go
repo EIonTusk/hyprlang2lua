@@ -532,10 +532,16 @@ func (g *generator) emitKeyValue(kv KeyValue, parentPath []string) {
 // carries a same-line source comment (e.g. "# default value") which will be
 // appended after the leaf's ", " in the emitted Lua table.
 func (g *generator) appendConfig(section, dottedKey, rawValue, trailing string) {
+	// fmtConfValue matches on the source spelling (isCssGapField), so resolve
+	// the value before normalizing the route.
 	value := g.fmtConfValue(section, dottedKey, rawValue)
+	section = luaConfigKey(section)
+	path := strings.Split(dottedKey, ".")
+	for i := range path {
+		path[i] = luaConfigKey(path[i])
+	}
 	if g.merge {
-		path := append([]string{section}, strings.Split(dottedKey, ".")...)
-		g.mergedTree.setLeaf(path, value, trailing)
+		g.mergedTree.setLeaf(append([]string{section}, path...), value, trailing)
 		return
 	}
 	tree, ok := g.configPending[section]
@@ -544,7 +550,6 @@ func (g *generator) appendConfig(section, dottedKey, rawValue, trailing string) 
 		g.configPending[section] = tree
 		g.configOrder = append(g.configOrder, section)
 	}
-	path := strings.Split(dottedKey, ".")
 	tree.setLeaf(path, value, trailing)
 }
 
@@ -595,7 +600,7 @@ func (g *generator) flushConfig() {
 	for _, section := range g.configOrder {
 		tree := g.configPending[section]
 		g.writeln("hl.config({")
-		g.writef("    %s = {", section)
+		g.writef("    %s = {", luaTableKey(section))
 		emitConfTree(&g.out, tree, 2)
 		g.writeln("    },")
 		g.writeln("})")
@@ -774,8 +779,12 @@ func (g *generator) emitSection(s Section) {
 	case "general", "decoration", "input", "animations", "gestures", "misc",
 		"binds", "cursor", "debug", "dwindle", "master", "group", "render",
 		"xwayland", "opengl", "ecosystem", "experimental", "layout",
-		"scrolling", "quirks":
-		g.emitConfigSection(s, []string{s.Name})
+		"scrolling", "quirks",
+		// 'input-capture' (Hyprland 0.56) is the only top-level section whose
+		// hyprlang name is hyphenated; luaConfigKey rewrites it to the
+		// 'input_capture' table hl.config expects.
+		"input-capture":
+		g.emitConfigSection(s, []string{luaConfigKey(s.Name)})
 	case "device":
 		g.emitDeviceSection(s)
 	case "plugin":
@@ -822,7 +831,7 @@ func (g *generator) emitConfigSection(s Section, path []string) {
 		case KeyValue:
 			g.emitKeyValue(c, path)
 		case Section:
-			g.emitConfigSection(c, append(append([]string{}, path...), c.Name))
+			g.emitConfigSection(c, append(append([]string{}, path...), luaConfigKey(c.Name)))
 		case Comment:
 			if g.stripComments {
 				continue
@@ -1080,6 +1089,23 @@ func luaIdent(name string) string {
 		return "_"
 	}
 	return b.String()
+}
+
+// luaConfigKey normalizes one hl.config route segment to the spelling the Lua
+// config registry actually uses. Hyprland registers every config value's Lua
+// name through CConfigManager::luaConfigValueName
+// (src/config/lua/ConfigManager.cpp), which maps ':' → '.' and '-' → '_'. So
+// hyprlang's hyphenated routes are only reachable from Lua under their
+// underscored spelling:
+//
+//	input:touchpad:tap-to-click       → input.touchpad.tap_to_click
+//	input-capture:capture_modifiers   → input_capture.capture_modifiers
+//
+// Emitting the source hyphen instead produces "unknown config key" at load
+// time (hlConfig walks the table and looks each dotted path up verbatim), so
+// every segment on the hl.config path goes through here.
+func luaConfigKey(k string) string {
+	return strings.ReplaceAll(k, "-", "_")
 }
 
 // luaTableKey returns either an unquoted identifier (preferred) or a

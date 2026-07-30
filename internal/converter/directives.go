@@ -144,6 +144,9 @@ func splitCommas(s string) []string {
 //   bindc — { click = true, release = true } (Hyprland forces release for click)
 //   bindg — { drag = true, release = true }  (same)
 //   bindu — { submap_universal = true }   (active across submaps)
+//   bindx — { allow_input_capture = true } (fires while an input-capture
+//                                          client holds the seat; flag added
+//                                          in Hyprland 0.56)
 //   bindd — { description = "<the 3rd csv field>" }
 //                                          consumes an extra positional arg
 //                                          between KEY and DISPATCHER
@@ -156,10 +159,12 @@ func (g *generator) emitBind(d Directive) {
 	suffix := strings.TrimPrefix(d.Name, "bind")
 	opts := map[string]string{}
 	hasDescription := false
+	isMouse := false
 	unknownFlags := []byte{}
 	for i := 0; i < len(suffix); i++ {
 		switch suffix[i] {
 		case 'm', 's':
+			isMouse = isMouse || suffix[i] == 'm'
 			// No-op: neither 'mouse' nor multi-key has a HL.BindOptions
 			// field. The key string itself encodes the semantic
 			// ("mouse:272", "key1&key2").
@@ -187,6 +192,8 @@ func (g *generator) emitBind(d Directive) {
 			opts["release"] = "true"
 		case 'u':
 			opts["submap_universal"] = "true"
+		case 'x':
+			opts["allow_input_capture"] = "true"
 		case 'd':
 			hasDescription = true
 		default:
@@ -222,7 +229,15 @@ func (g *generator) emitBind(d Directive) {
 	}
 
 	keyExpr := combineModKey(mod, key)
-	dispatchExpr, reason := g.buildDispatcher(dispatcher, args)
+	var dispatchExpr, reason string
+	// A mouse bind's dispatcher field carries its own argument (see
+	// buildMouseDispatcher); everything else goes through the name table.
+	if isMouse {
+		dispatchExpr, _ = g.buildMouseDispatcher(dispatcher)
+	}
+	if dispatchExpr == "" {
+		dispatchExpr, reason = g.buildDispatcher(dispatcher, args)
+	}
 	if reason != "" {
 		// Emit a best-effort guess as a comment so the user can see exactly
 		// what was attempted, plus the specific reason it couldn't be safely
@@ -246,7 +261,7 @@ func formatBindOpts(opts map[string]string) string {
 	order := []string{
 		"locked", "release", "repeating", "non_consuming", "transparent",
 		"ignore_mods", "long_press", "dont_inhibit", "submap_universal",
-		"click", "drag", "description",
+		"allow_input_capture", "click", "drag", "description",
 	}
 	parts := []string{}
 	for _, k := range order {

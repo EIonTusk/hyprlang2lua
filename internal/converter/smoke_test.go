@@ -682,6 +682,87 @@ func TestMonitorV2LuminanceFields(t *testing.T) {
 	}
 }
 
+// TestHyphenatedConfigKeys covers the hyprlang config routes that contain a
+// '-'. Hyprland registers Lua config names through
+// CConfigManager::luaConfigValueName, which rewrites ':' → '.' and '-' → '_',
+// so the hyphenated source spelling is unreachable from hl.config — emitting
+// it verbatim makes Hyprland report "unknown config key" at load. Covers both
+// the nested section form and the flattened 'section:key = value' form.
+func TestHyphenatedConfigKeys(t *testing.T) {
+	src := `input {
+    touchpad {
+        tap-to-click = true
+        tap-and-drag = false
+    }
+}
+
+input-capture {
+    capture_modifiers = true
+}
+
+input-capture:enforce_barriers = false
+`
+	out, _, err := Convert(src)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	for _, want := range []string{
+		"tap_to_click = true,",
+		"tap_and_drag = false,",
+		"input_capture = {",
+		"capture_modifiers = true,",
+		"enforce_barriers = false,",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	// The source spelling must not survive in any form — neither as a bare
+	// key (invalid Lua) nor bracket-quoted (valid Lua, unknown to Hyprland).
+	for _, bad := range []string{"tap-to-click", "tap-and-drag", "input-capture ="} {
+		if strings.Contains(out, bad) {
+			t.Errorf("hyphenated config key %q leaked into output:\n%s", bad, out)
+		}
+	}
+	if strings.Contains(out, "unknown section") {
+		t.Errorf("input-capture section was not recognized:\n%s", out)
+	}
+}
+
+// TestHyprland056Additions covers the three conversion surfaces Hyprland 0.56
+// added on the hyprlang side, each of which needs a typed Lua counterpart:
+// the 'x' bind flag (allow_input_capture), the 'releaseinputcapture'
+// dispatcher, and the bindm resize ratio modes — which only became
+// expressible in Lua once 0.56 added resize({ keep_aspect_ratio }).
+func TestHyprland056Additions(t *testing.T) {
+	src := `bindx = SUPER, X, exec, foo
+bindxl = SUPER, Y, exec, bar
+bind = SUPER, Z, releaseinputcapture
+bindm = ALT, mouse:273, resizewindow 1
+bindm = ALT, mouse:274, resizewindow 2
+bindm = ALT, mouse:272, movewindow
+`
+	out, rpt, err := Convert(src)
+	if err != nil {
+		t.Fatalf("Convert: %v", err)
+	}
+	for _, want := range []string{
+		`hl.bind("SUPER + X", hl.dsp.exec_cmd("foo"), { allow_input_capture = true })`,
+		`{ locked = true, allow_input_capture = true }`,
+		`hl.bind("SUPER + Z", hl.dsp.release_input_capture())`,
+		`hl.bind("ALT + mouse:273", hl.dsp.window.resize({ keep_aspect_ratio = true }))`,
+		`hl.bind("ALT + mouse:274", hl.dsp.window.resize({ keep_aspect_ratio = false }))`,
+		`hl.bind("ALT + mouse:272", hl.dsp.window.drag())`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if rpt.Flagged != 0 {
+		t.Errorf("expected no flags, got %d:\n%s", rpt.Flagged, out)
+	}
+}
+
 // TestPermissionModeField pins the HL.PermissionSpec field name. hlPermission
 // reads binary/type/**mode** and rejects the whole table with
 // "hl.permission: expected { binary, type, mode }" if any is missing, so an

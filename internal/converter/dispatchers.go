@@ -51,6 +51,11 @@ func (g *generator) buildDispatcher(name string, args []string) (string, string)
 		return "hl.dsp.exit()", ""
 	case "forcerendererreload":
 		return "hl.dsp.force_renderer_reload()", ""
+	case "releaseinputcapture":
+		// Added in Hyprland 0.56 on both front-ends at once — legacy
+		// 'releaseinputcapture' (src/config/legacy/DispatcherTranslator.cpp)
+		// and typed hl.dsp.release_input_capture(). No args either side.
+		return "hl.dsp.release_input_capture()", ""
 	case "noop", "no_op":
 		// Wiki: `no_op()`. Useful for unbinding default keybinds in
 		// conditional configs (rare in legacy hyprlang, but present).
@@ -646,6 +651,38 @@ func (g *generator) buildDispatcher(name string, args []string) (string, string)
 
 	// Unknown dispatcher name — not present in our switch.
 	return "", fmt.Sprintf("no mapping for dispatcher %q", name)
+}
+
+// buildMouseDispatcher translates the dispatcher field of a `bindm`. Mouse
+// binds are parsed unlike every other bind: Hyprland forces the handler to
+// "mouse" and passes the WHOLE third CSV field through as the argument
+// (src/config/legacy/ConfigManager.cpp: `COMMAND = mouse ? HANDLER :
+// ARGS[3 + ...]`), so the ratio suffix in 'resizewindow 1' arrives as part of
+// the dispatcher name rather than as a separate arg — which is why this can't
+// live in buildDispatcher's name table.
+//
+// Actions::mouse reads that trailing integer as MBIND_RESIZE_FORCE_RATIO (1)
+// or MBIND_RESIZE_BLOCK_RATIO (2), inside a try/catch that falls through to an
+// unconstrained MBIND_RESIZE for anything else. Hyprland 0.56 exposes both
+// ratio modes to Lua via resize({ keep_aspect_ratio }) — which pushes 1 for
+// true and 2 for false; before 0.56 neither had a typed equivalent.
+//
+// Returns ok=false for fields this doesn't own (including a bare
+// 'resizewindow', which the normal dispatcher table already handles), so the
+// caller falls back to buildDispatcher.
+func (g *generator) buildMouseDispatcher(field string) (string, bool) {
+	head, tail := splitFirstWord(field)
+	if !strings.EqualFold(head, "resizewindow") || tail == "" {
+		return "", false
+	}
+	switch tail {
+	case "1":
+		return "hl.dsp.window.resize({ keep_aspect_ratio = true })", true
+	case "2":
+		return "hl.dsp.window.resize({ keep_aspect_ratio = false })", true
+	default:
+		return "hl.dsp.window.resize()", true
+	}
 }
 
 // splitFirstWord returns the first whitespace-delimited word in s and

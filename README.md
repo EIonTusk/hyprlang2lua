@@ -2,6 +2,7 @@
 
 Convert legacy [Hyprland](https://hypr.land) `hyprland.conf` (hyprlang) files
 to the Lua configuration format introduced in Hyprland 0.55 (May 2026).
+Mappings currently track Hyprland **0.56.1**.
 
 **Try it online:** <https://eiontusk.github.io/hyprlang2lua/> — runs entirely
 in your browser, no input ever leaves the page.
@@ -99,15 +100,19 @@ Exit codes: `0` success, `1` I/O or conversion error, `2` usage/flag error,
   `general`, `decoration`, `input`, `animations`, `gestures`, `misc`,
   `binds`, `cursor`, `debug`, `dwindle`, `master`, `group`, `render`,
   `xwayland`, `opengl`, `ecosystem`, `experimental`, `layout`,
-  `scrolling`, `quirks`. Nested sections (`decoration { blur { } }`) emit
-  nested Lua tables.
+  `scrolling`, `quirks`, `input-capture`. Nested sections
+  (`decoration { blur { } }`) emit nested Lua tables. Hyphenated routes
+  (`input-capture`, `input:touchpad:tap-to-click`) are rewritten to the
+  underscored spelling the Lua config registry uses — Hyprland's
+  `luaConfigValueName` maps `-` to `_`, so the source spelling would be
+  rejected as an unknown config key.
 - `$var = value` → `local var = value`. References (`$var` on the right side
   of any directive) resolve to the local; mixed text builds a concat chain
   (`mainMod .. " + SHIFT + 1"`).
 - The `bind` family — `bind`, `bindm`, `binde`, `bindr`, `bindl`, `bindn`,
-  `bindo`, `bindt`, `bindi`, `bindp`, `bindc`, `bindd`, and any combined-flag
-  form like `bindel` / `bindle`. Each flag suffix becomes the corresponding
-  field on `HL.BindOptions`.
+  `bindo`, `bindt`, `bindi`, `bindp`, `bindc`, `bindd`, `bindu`, `bindx`, and
+  any combined-flag form like `bindel` / `bindle`. Each flag suffix becomes the
+  corresponding field on `HL.BindOptions`.
 - `exec`, `exec-once`, `execr-once`, `exec-shutdown`. Bundled into one
   `hl.on("hyprland.start", function() ... end)` (or `config.reloaded` /
   `hyprland.shutdown`) block per kind.
@@ -184,6 +189,13 @@ Exit codes: `0` success, `1` I/O or conversion error, `2` usage/flag error,
   the direct `hl.dsp.*` call so the bind doesn't pay an `exec` per keypress.
   Other `hyprctl` subcommands (`reload`, `keyword`, `notify`, …) stay as
   literal `hl.dsp.exec_cmd` calls.
+- `bindm = ..., resizewindow 1` / `resizewindow 2` (the mouse-bind
+  force/block aspect-ratio modes — for mouse binds hyprlang passes the whole
+  third CSV field as the dispatch arg) → `resize({ keep_aspect_ratio = true })`
+  / `{ keep_aspect_ratio = false }`. These had no typed equivalent before
+  Hyprland 0.56.
+- `releaseinputcapture` → `hl.dsp.release_input_capture()` (both sides added
+  in Hyprland 0.56).
 
 Anything not in either list is preserved with a `-- TODO: manual review`
 comment, contributes to `flagged` in the report, and trips `--check`.
@@ -244,6 +256,63 @@ Golden fixtures live in `internal/converter/testdata/`; each `.conf` is
 paired with the expected `.lua` output. `FuzzConvert` exercises the lexer
 and parser against random byte sequences to catch panics.
 
+### API surface gate
+
+`TestAPISurface` executes every golden under a fake `hl` table and checks each
+config key and bind option it touches against the API surface pinned in
+`internal/converter/testdata/api/`. It exists to catch the one failure class
+that neither the golden bytes nor `luac -p` can see: output that is valid Lua,
+byte-identical to its golden, and still rejected at load because it names a
+config key Hyprland doesn't have. The key walker deliberately mirrors
+Hyprland's own `hlConfig` loop, so typed leaves (`HL.CssGap`, gradients) aren't
+mistaken for nested sections. Skipped when no `lua` is on PATH.
+
+The pinned lists are generated from Hyprland's own stub generator:
+
+```sh
+git clone --depth 1 --branch v0.56.1 https://github.com/hyprwm/Hyprland
+python3 Hyprland/meta/generateLuaStubs.py --root Hyprland --output hl.meta.lua
+# then extract the HL.ConfigKey alias and HL.BindOptions class into
+# testdata/api/config_keys.txt and testdata/api/bind_options.txt
+```
+
+Regenerate them when retargeting a new Hyprland release — the resulting diff
+*is* the list of config keys that moved, and bump
+`testdata/api/HYPRLAND_VERSION` to match. The gate cannot check dispatcher
+argument tables: the generated stubs type every dispatcher as
+`fun(...): HL.Dispatcher`, so fields like `resize`'s `keep_aspect_ratio` carry
+no type information there.
+
+### Verifying against a real Hyprland
+
+`TestHyprlandVerifyConfig` runs every golden through an actual Hyprland
+binary's `--verify-config`, which loads the Lua config and reports errors
+without starting a compositor. This is the authoritative gate — it checks
+config keys, spec fields, dispatcher argument tables and rule effects against
+the implementation itself:
+
+```sh
+HYPRLAND_BIN=/path/to/Hyprland go test ./internal/converter -run VerifyConfig
+```
+
+It is opt-in rather than PATH-discovered, and skips unless the binary's
+`major.minor` matches `testdata/api/HYPRLAND_VERSION`, so an older local
+install can't produce spurious failures (0.55.4 has no
+`hl.dsp.release_input_capture` at all). It found the `hl.permission` bug where
+the converter emitted `allow =` instead of the `mode =` that
+`HL.PermissionSpec` declares — output that was valid Lua, matched its golden,
+and passed the pinned-surface check, but was rejected at config load.
+
+You don't need to install Hyprland to run this. On Arch, extracting the package
+is enough:
+
+```sh
+curl -O https://archive.archlinux.org/packages/h/hyprland/hyprland-0.56.0-2-x86_64.pkg.tar.zst
+tar -I zstd -xf hyprland-0.56.0-2-x86_64.pkg.tar.zst
+# add any libs the binary reports as missing (ldd usr/bin/Hyprland) the same way,
+# then point LD_LIBRARY_PATH at them
+```
+
 ## Contributing
 
 PRs are squash-merged, so the PR title becomes the master commit subject —
@@ -274,7 +343,7 @@ pick `patch` / `minor` / `major`.
 Mappings were derived from, in priority order:
 
 1. `/usr/share/hypr/stubs/hl.meta.lua` — the autogenerated Lua API stubs
-   shipped with Hyprland 0.55 (definitive list of `hl.*` functions, the
+   shipped with Hyprland (definitive list of `hl.*` functions, the
    `HL.ConfigKey` set, and every `*Spec` type).
 2. `/usr/share/hypr/hyprland.lua` — the shipped example, used as a style
    reference for idiomatic table layout.
