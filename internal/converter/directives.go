@@ -123,6 +123,44 @@ func splitCommas(s string) []string {
 	return out
 }
 
+// splitCommasN splits like splitCommas but stops after n-1 separators, so
+// the final field keeps any remaining commas verbatim.
+//
+// This mirrors Hyprland's own CVarList(value, n), which the directives that
+// end in a free-form value use — 'env' takes CVarList(value, 2) and the bind
+// family CVarList(value, 4) (5 with a 'd' description). Under that rule
+// `env = FOO,a,b,c` sets FOO to the literal "a,b,c", and an exec bind's
+// command keeps its commas and its exact spacing. Splitting on every comma
+// instead would reject the first and silently reformat the second.
+//
+// n <= 0 means "no bound" and defers to splitCommas.
+func splitCommasN(s string, n int) []string {
+	if n <= 0 {
+		return splitCommas(s)
+	}
+	var out []string
+	var cur strings.Builder
+	i := 0
+	for i < len(s) {
+		c := s[i]
+		if c == '\\' && i+1 < len(s) && s[i+1] == ',' {
+			cur.WriteByte(',')
+			i += 2
+			continue
+		}
+		if c == ',' && len(out) < n-1 {
+			out = append(out, strings.TrimSpace(cur.String()))
+			cur.Reset()
+			i++
+			continue
+		}
+		cur.WriteByte(c)
+		i++
+	}
+	out = append(out, strings.TrimSpace(cur.String()))
+	return out
+}
+
 // emitBind translates bind[<letters>] = MOD, KEY[, DESCRIPTION], DISPATCHER, ARGS...
 //
 // Suffix letters and the HL.BindOptions field each maps to (per
@@ -224,8 +262,18 @@ func (g *generator) emitBind(d Directive) {
 	}
 	dispatcher := parts[dispatchIdx]
 	args := []string{}
+	// rawArgs is everything after the dispatcher's comma, unsplit — what
+	// Hyprland's CVarList(value, 4|5) hands the dispatcher. Dispatchers whose
+	// argument IS verbatim text (exec, execr) use it so a command containing
+	// commas survives with its original spacing; the rest keep the split form.
+	rawArgs := ""
 	if len(parts) > dispatchIdx+1 {
 		args = parts[dispatchIdx+1:]
+		if bounded := splitCommasN(d.Value, dispatchIdx+2); len(bounded) == dispatchIdx+2 {
+			rawArgs = bounded[dispatchIdx+1]
+		} else {
+			rawArgs = joinArgs(args)
+		}
 	}
 
 	keyExpr := combineModKey(mod, key)
@@ -236,7 +284,7 @@ func (g *generator) emitBind(d Directive) {
 		dispatchExpr, _ = g.buildMouseDispatcher(dispatcher)
 	}
 	if dispatchExpr == "" {
-		dispatchExpr, reason = g.buildDispatcher(dispatcher, args)
+		dispatchExpr, reason = g.buildDispatcherRaw(dispatcher, args, rawArgs)
 	}
 	if reason != "" {
 		// Emit a best-effort guess as a comment so the user can see exactly
@@ -1345,9 +1393,12 @@ func (g *generator) emitLayerRule(d Directive) {
 // vars (HYPRLAND_INSTANCE_SIGNATURE etc.); it does NOT make hl.env
 // auto-propagate user values. Hence the explicit dbus arg is necessary
 // to preserve envd's behaviour.
+// Hyprland reads the value with CVarList(value, 2) and rejects it only when
+// the name is empty, so everything after the FIRST comma is the value —
+// `env = FOO,a,b,c` is legal and sets FOO to "a,b,c".
 func (g *generator) emitEnv(d Directive, dbus bool) {
-	parts := splitCommas(d.Value)
-	if len(parts) != 2 {
+	parts := splitCommasN(d.Value, 2)
+	if len(parts) != 2 || parts[0] == "" {
 		g.flag(d.line, "malformed env: "+d.Value)
 		g.writef("-- TODO: manual review — malformed env on line %d: %s", d.line, d.Value)
 		return

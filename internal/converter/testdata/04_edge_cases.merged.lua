@@ -11,6 +11,12 @@ hl.device({
 -- Escaped comma inside an exec arg.
 hl.bind("SUPER + R", hl.dsp.exec_cmd("sh -c 'echo a,b'"))
 
+-- Unescaped commas in an exec arg: Hyprland's CVarList(value, 4) stops
+-- splitting at the dispatcher, so the command keeps its commas AND its
+-- original spacing.
+hl.bind("SUPER + X", hl.dsp.exec_cmd("sh -c \"echo a,b,c\""))
+hl.bind("SUPER + Y", hl.dsp.exec_cmd("notify-send \"one,two\" \"three, four\""), { description = "Notify" })
+
 -- Line continuation in a value.
 hl.bind("SUPER + T", hl.dsp.exec_cmd("sh -c     'echo continued'"))
 
@@ -28,11 +34,19 @@ hl.gesture({
 })
 
 hl.permission({ binary = "/usr/(bin|local/bin)/grim", type = "screencopy", mode = "allow" })
+
+hl.env("XCURSOR_THEME", "Bibata-Modern-Ice")
+hl.env("LIST_VAR", "a,b,c")
+hl.env("PATH_LIKE", "/opt/one,/opt/two", true)
+
+-- TODO: manual review — malformed env on line 39: NO_COMMA
 hl.config({
     general = {
         gaps_in = 7,
     },
     -- Gesture.
     -- Permissions.
+    -- env values are split on the FIRST comma only — the rest is the value.
+    -- …but a value with no comma at all has no name/value pair to emit.
 })
 
