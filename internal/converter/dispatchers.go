@@ -22,6 +22,16 @@ import (
 // Bound to the generator so dispatcher emissions share its declared-$var
 // set, polyfill flag, and helper-needed bookkeeping.
 func (g *generator) buildDispatcher(name string, args []string) (string, string) {
+	return g.buildDispatcherRaw(name, args, joinArgs(args))
+}
+
+// buildDispatcherRaw is buildDispatcher for callers that still hold the
+// argument text as the user wrote it. rawArgs is the unsplit remainder after
+// the dispatcher's comma; dispatchers whose argument is verbatim text read it
+// instead of re-joining the split fields, which would turn `echo a,b` into
+// `echo a, b`. Everything else ignores it — reconstructing the string is only
+// lossy for the comma joiner itself.
+func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs string) (string, string) {
 	decls := g.declaredVars
 	polyfill := g.polyfill
 	switch name {
@@ -31,7 +41,7 @@ func (g *generator) buildDispatcher(name string, args []string) (string, string)
 		// another dispatcher through a child process. We can spot that case
 		// and recurse so the bind becomes a direct hl.dsp.* call — one
 		// fewer process spawn per keypress, and clearer generated Lua.
-		if disp, sub := tryHyprctlDispatch(joinArgs(args)); disp != "" {
+		if disp, sub := tryHyprctlDispatch(rawArgs); disp != "" {
 			expr, reason := g.buildDispatcher(disp, sub)
 			if reason == "" {
 				return expr, ""
@@ -41,12 +51,12 @@ func (g *generator) buildDispatcher(name string, args []string) (string, string)
 		}
 		// Shell-context formatting: declared $vars rewrite to locals,
 		// undeclared $HOME / $XDG_* survive literally for /bin/sh to expand.
-		return fmt.Sprintf("hl.dsp.exec_cmd(%s)", g.fmtShell(joinArgs(args))), ""
+		return fmt.Sprintf("hl.dsp.exec_cmd(%s)", g.fmtShell(rawArgs)), ""
 	case "execr":
 		// exec_raw runs cmd directly (no `sh -c`), per the wiki: it
 		// still benefits from declared-$var rewriting, but undeclared
 		// refs survive (the eventual exec'd program may interpret `$X`).
-		return fmt.Sprintf("hl.dsp.exec_raw(%s)", g.fmtShell(joinArgs(args))), ""
+		return fmt.Sprintf("hl.dsp.exec_raw(%s)", g.fmtShell(rawArgs)), ""
 	case "exit":
 		return "hl.dsp.exit()", ""
 	case "forcerendererreload":

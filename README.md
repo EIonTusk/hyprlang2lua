@@ -143,6 +143,11 @@ Exit codes: `0` success, `1` I/O or conversion error, `2` usage/flag error,
   Hyprland source (`src/config/lua/bindings/LuaBindingsConfigRules.cpp`):
   when true, hyprland calls `systemctl --user import-environment` and
   `dbus-update-activation-environment --systemd` for that variable.
+  Only the first comma separates name from value, matching Hyprland's
+  `CVarList(value, 2)` — so `env = LIST,a,b,c` sets `LIST` to `"a,b,c"`.
+  The same bound applies to the bind family (`CVarList(value, 4)`, or 5
+  with a `bindd` description): an `exec` bind's command keeps its commas
+  and its original spacing.
 - `execr-once = cmd` → `hl.dispatch(hl.dsp.exec_raw(cmd))` inside the
   `hyprland.start` hook. `exec_raw` is the native dispatcher per the
   [Dispatchers wiki](https://wiki.hypr.land/Configuring/Basics/Dispatchers/):
