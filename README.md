@@ -13,6 +13,24 @@ the shape of the example config shipped at `/usr/share/hypr/hyprland.lua`,
 mapping each hyprlang construct to the `hl.*` API exposed by the Lua stubs
 at `/usr/share/hypr/stubs/hl.meta.lua`.
 
+## What it handles
+
+| Area | Covered |
+| --- | --- |
+| **Bind family** | `bind`, `binde`, `bindl`, `bindr`, `bindm`, `bindn`, `bindt`, `bindi`, `bindo`, `bindp`, `bindc`, `bindd`, `bindu`, `bindx`, and combined forms (`bindel`, `bindle`). Each suffix maps to its `HL.BindOptions` field; `bindd`'s label becomes `description`; `bindm` mouse buttons keep their `mouse:272` key syntax. |
+| **Submaps** | `submap = name` … `submap = reset` collapses into one `hl.define_submap(name, function() … end)` block. |
+| **Nested sections** | `decoration { blur { … } shadow { … } }` emits nested Lua tables. Hyphenated routes (`input:touchpad:tap-to-click`, `input-capture`) are rewritten to the underscored keys the Lua config registry actually accepts. |
+| **Rules** | `windowrule`, `windowrulev2`, `layerrule`, `workspace`, `monitor`, `monitorv2 { … }`, `permission`, `gesture`, and `device:<name> { … }`. |
+| **Variables** | `$var = value` → `local var = value`; references resolve, and mixed text builds a concat chain (`mainMod .. " + SHIFT + 1"`). |
+| **Exec & env** | `exec`, `exec-once`, `execr-once`, `exec-shutdown` bundle into `hl.on(...)` hooks. `env` / `envd` split on the first comma only, so values containing commas survive; exec commands keep their commas *and* their original spacing. |
+| **Dispatchers** | The 0.55 typed-table migration, including the ones that packed several fields into one string (`setprop`, `tagwindow`, `fullscreenstate`, `alterzorder`, …). `exec, hyprctl dispatch X` is rewritten to a direct `hl.dsp.*` call so the bind doesn't spawn a process per keypress. |
+| **Comments** | Preserved in place, `#` → `--`, including trailing comments. |
+| **Anything ambiguous** | Emitted with a `-- TODO: manual review` comment, counted in the report, and `--check` exits `3` so CI catches it. Nothing is silently guessed. |
+
+No install needed to try it: the [browser converter](https://eiontusk.github.io/hyprlang2lua/)
+is the same engine compiled to WebAssembly, and your config never leaves the page.
+Per-directive detail lives in [Supported directives](#supported-directives).
+
 ## Install
 
 ### Arch Linux (AUR)
