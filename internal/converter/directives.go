@@ -1000,15 +1000,20 @@ func emitLayerRuleField(g *generator, rule string, line int, out *[]string) {
 	}
 }
 
-// emitWindowRule handles 'windowrule' (legacy) and 'windowrulev2'.
+// emitWindowRule handles 'windowrule' and 'windowrulev2'.
 //
-// Hyprland 0.41+ unified the two: any field of the form 'match:KEY VALUE' or
-// 'KEY:VALUE' is a matcher, every other field is a property/action. Fields
-// can appear in any order. We classify each field, accumulate matches in the
-// 'match' subtable, and emit the rest as window-rule properties.
+// Hyprland 0.48 dropped the v1 grammar: 'windowrule' now parses exactly like
+// 'windowrulev2', so for both keywords any field of the form 'match:KEY VALUE'
+// or 'KEY:VALUE' (KEY a known matcher) is a matcher, and every other field is
+// a property/action. Fields can appear in any order. We classify each field,
+// accumulate matches in the 'match' subtable, and emit the rest as
+// window-rule properties.
 //
-// For legacy v1 (no 'match:' anywhere, no 'KEY:' fields), the trailing field
-// is treated as a class regex per the pre-0.41 grammar.
+// Only a 'windowrule' line with no matcher at all is read as pre-0.48 v1
+// ('windowrule = float, ^(kitty)$'): its trailing field is the class regex.
+// A v1 line whose window field happened to start with 'title:' meant the
+// same thing under v1 as the v2 matcher does, so classifying it as a matcher
+// can't change a rule that used to work.
 func (g *generator) emitWindowRule(d Directive, v2 bool) {
 	parts := splitCommas(d.Value)
 	if len(parts) < 2 {
@@ -1025,7 +1030,7 @@ func (g *generator) emitWindowRule(d Directive, v2 bool) {
 	var actions []string
 
 	for i, f := range parts {
-		k, v, isMatch := classifyWindowRuleField(f, v2, i == 0)
+		k, v, isMatch := classifyWindowRuleField(f, i == 0)
 		if isMatch {
 			matches = append(matches, matchKV{k, v})
 			continue
@@ -1099,11 +1104,14 @@ func groupKeyForMatches(matches []matchKV) string {
 // Recognized matcher forms:
 //   match:KEY VALUE     — modern explicit matcher, e.g. 'match:class .*'
 //   KEY:VALUE           — v2-style compact matcher, e.g. 'class:^kitty$'
-//                         (only when v2 is true OR no leading word like 'float')
+//                         (never in the leading field)
+//
+// The KEY:VALUE form applies to 'windowrule' as well as 'windowrulev2':
+// since Hyprland 0.48 both keywords share the v2 grammar.
 //
 // firstField hints whether this is the leading field; we don't want 'float'
 // alone to be classified as a matcher just because it has no colon.
-func classifyWindowRuleField(field string, v2, firstField bool) (string, string, bool) {
+func classifyWindowRuleField(field string, firstField bool) (string, string, bool) {
 	field = strings.TrimSpace(field)
 	if strings.HasPrefix(field, "match:") {
 		rest := strings.TrimPrefix(field, "match:")
@@ -1119,10 +1127,7 @@ func classifyWindowRuleField(field string, v2, firstField bool) (string, string,
 		}
 		return k, v, true
 	}
-	if !v2 {
-		return "", "", false
-	}
-	// v2: 'KEY:VALUE' where KEY is a known match key. We require this list
+	// 'KEY:VALUE' where KEY is a known match key. We require this list
 	// rather than treating every colon-separated field as a match, because
 	// actions like 'workspace 2' or 'monitor DP-1' use spaces, not colons,
 	// in the v2 grammar.
