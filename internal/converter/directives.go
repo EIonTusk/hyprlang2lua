@@ -1158,6 +1158,10 @@ func normalizeMatchKey(k string) (string, bool) {
 	case "class", "title", "tag", "xwayland", "fullscreen", "focus",
 		"workspace", "group", "modal", "content", "xdg_tag", "namespace":
 		return k, true
+	case "xdgtag":
+		// Pre-0.53 compact spelling 'xdgTag:' (added in v0.49; the
+		// caller lowercases keys).
+		return "xdg_tag", true
 	case "initial_class", "initialclass":
 		return "initial_class", true
 	case "initial_title", "initialtitle":
