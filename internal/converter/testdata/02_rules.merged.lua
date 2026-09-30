@@ -37,6 +37,27 @@ hl.window_rule({
     float = true,
 })
 
+-- Hyprland >= 0.48: 'windowrule' takes the v2 grammar.
+hl.window_rule({
+    match = {
+        class = "^(big)$",
+        title = "^(x)$",
+    },
+    size = "800 600",
+})
+
+hl.window_rule({
+    match = {
+        class = "^$",
+        title = "^$",
+        xwayland = 1,
+        float = 1,
+        fullscreen = 0,
+        pin = 0,
+    },
+    no_focus = true,
+})
+
 hl.workspace_rule({
     workspace = "1",
     persistent = true,
