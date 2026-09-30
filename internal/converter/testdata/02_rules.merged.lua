@@ -58,6 +58,14 @@ hl.window_rule({
     no_focus = true,
 })
 
+hl.window_rule({
+    match = {
+        xdg_tag = "^(portal)$",
+        initial_class = "^(big)$",
+    },
+    float = true,
+})
+
 hl.workspace_rule({
     workspace = "1",
     persistent = true,
