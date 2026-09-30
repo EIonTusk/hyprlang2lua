@@ -130,13 +130,13 @@ func newGenerator(opts Options) *generator {
 // stay defensive. Run before the main emit pass so a reference earlier
 // in the file resolves against a later declaration.
 func (g *generator) gatherDecls(nodes []node) {
-	var order []string
+	var order []varDef
 	var walk func([]node)
 	walk = func(nodes []node) {
 		for _, n := range nodes {
 			switch x := n.(type) {
 			case VarDecl:
-				order = append(order, strings.TrimPrefix(x.Name, "$"))
+				order = append(order, varDef{strings.TrimPrefix(x.Name, "$"), x.Value, x.line})
 			case Section:
 				walk(x.Body)
 			}

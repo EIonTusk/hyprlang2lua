@@ -59,7 +59,7 @@ func TestInterpolate(t *testing.T) {
 // text in the surrounding string (so a downstream /bin/sh -c gets the raw
 // $HOME / $XDG_* sigil and expands it at runtime).
 func TestInterpolate_DeclaredSet(t *testing.T) {
-	_, decls := newVarScopes([]string{"mainMod", "terminal"})
+	_, decls := newVarScopes(defsOf("mainMod", "terminal"))
 	cases := []struct {
 		name string
 		in   string
@@ -97,9 +97,9 @@ func TestInterpolate_DeclaredSet(t *testing.T) {
 // `$looking-glass` must resolve whole, and `$center-float-large` must win
 // over `$center-float`.
 func TestInterpolate_HyprlangNames(t *testing.T) {
-	values, shell := newVarScopes([]string{
+	values, shell := newVarScopes(defsOf(
 		"looking-glass", "gnome-schema", "center-float", "center-float-large", "mainMod",
-	})
+	))
 	cases := []struct {
 		name  string
 		scope *varScope
@@ -141,11 +141,20 @@ func TestInterpolate_HyprlangNames(t *testing.T) {
 // names that spell the same Lua identifier must not alias one another, and a
 // name that is a Lua keyword must not become one.
 func TestVarScopeIdents(t *testing.T) {
-	values, _ := newVarScopes([]string{"a-b", "a_b", "a.b", "end", "a-b"})
+	values, _ := newVarScopes(defsOf("a-b", "a_b", "a.b", "end", "a-b"))
 	want := map[string]string{"a-b": "a_b", "a_b": "a_b_2", "a.b": "a_b_3", "end": "end_"}
 	for name, id := range want {
 		if got := values.ident(name); got != id {
 			t.Errorf("ident(%q) = %q, want %q", name, got, id)
 		}
 	}
+}
+
+// defsOf declares each name once, with an empty value, on successive lines.
+func defsOf(names ...string) []varDef {
+	out := make([]varDef, len(names))
+	for i, n := range names {
+		out[i] = varDef{name: n, line: i + 1}
+	}
+	return out
 }

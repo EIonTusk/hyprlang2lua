@@ -1014,7 +1014,7 @@ func emitLayerRuleField(g *generator, rule string, line int, out *[]string) {
 // same thing under v1 as the v2 matcher does, so classifying it as a matcher
 // can't change a rule that used to work.
 func (g *generator) emitWindowRule(d Directive, v2 bool) {
-	parts := splitCommas(d.Value)
+	parts := g.vars.expandFields(splitCommas(d.Value), d.line)
 	if len(parts) < 2 {
 		// A malformed rule shouldn't be folded into the previous one — the
 		// TODO line is its own emission, so close out any pending coalesce
@@ -1367,7 +1367,7 @@ func emitWindowAction(g *generator, action string, line int, out *[]string) {
 // matching the way users write a hyprlang block of related rules per
 // namespace.
 func (g *generator) emitLayerRule(d Directive) {
-	parts := splitCommas(d.Value)
+	parts := g.vars.expandFields(splitCommas(d.Value), d.line)
 	if len(parts) < 2 {
 		g.flushPendingRule()
 		g.flag(d.line, "malformed layer rule: "+d.Value)
