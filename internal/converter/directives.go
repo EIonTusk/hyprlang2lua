@@ -1042,6 +1042,10 @@ func (g *generator) emitWindowRule(d Directive, v2 bool) {
 	if len(matches) == 0 && !v2 && len(parts) == 2 {
 		matches = append(matches, matchKV{"class", parts[1]})
 		actions = []string{parts[0]}
+		// Hyprland 0.48+ fails this line with "Invalid rulev2 syntax" and
+		// drops the rule, so on those versions it never applied. The Lua
+		// rule will, which may be a behaviour change worth knowing about.
+		g.legacy(d.line, "pre-0.48 windowrule syntax (bare window regex): Hyprland 0.48 and later rejected this line, so the rule had no effect there; converted as a class match, which will apply again")
 	}
 
 	var actionLines []string

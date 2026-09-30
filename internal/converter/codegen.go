@@ -199,8 +199,16 @@ func (g *generator) translated(n int) { g.report.Translated += n }
 func (g *generator) passthrough()     { g.report.Passthrough++ }
 func (g *generator) flag(line int, text string) {
 	g.report.Flagged++
-	g.report.Notes = append(g.report.Notes, ReportNote{Line: line, Text: text})
+	g.report.Notes = append(g.report.Notes, ReportNote{Line: line, Text: text, Kind: NoteFlagged})
 	g.classifyLine(line, "flagged")
+}
+
+// legacy records an informational note for a line that converted cleanly but
+// uses a syntax recent hyprlang Hyprland rejected. It leaves the line's
+// gutter class alone (the line was translated) and doesn't trip --check.
+func (g *generator) legacy(line int, text string) {
+	g.report.Legacy++
+	g.report.Notes = append(g.report.Notes, ReportNote{Line: line, Text: text, Kind: NoteLegacy})
 }
 
 // classifyLine records a per-line classification for the diff gutter.

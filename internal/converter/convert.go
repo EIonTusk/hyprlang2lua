@@ -17,10 +17,15 @@ package converter
 // Flagged     — emitted with a "-- TODO: manual review" marker because the
 //                converter could not safely translate them. --check exits
 //                non-zero when this is non-zero.
+// Legacy      — translated, but written in a syntax that recent hyprlang
+//                Hyprland no longer accepted, so the line had no effect
+//                there and the converted rule will apply again. Informational
+//                only: it does not count toward Flagged or trip --check.
 type Report struct {
 	Translated  int
 	Passthrough int
 	Flagged     int
+	Legacy      int
 	Notes       []ReportNote
 	// LineClass maps 1-based source-line numbers to a classification used by
 	// UIs to paint a diff-style gutter on the input: "translated" (line was
@@ -34,7 +39,19 @@ type Report struct {
 type ReportNote struct {
 	Line int
 	Text string
+	Kind NoteKind
 }
+
+// NoteKind says why a [ReportNote] was raised.
+type NoteKind string
+
+const (
+	// NoteFlagged: the line was emitted as a TODO; counted in Flagged.
+	NoteFlagged NoteKind = "flagged"
+	// NoteLegacy: the line was translated, but its syntax was rejected by
+	// recent hyprlang Hyprland; counted in Legacy.
+	NoteLegacy NoteKind = "legacy"
+)
 
 func (r Report) Total() int { return r.Translated + r.Passthrough + r.Flagged }
 

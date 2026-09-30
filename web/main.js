@@ -239,14 +239,24 @@ bindm = $mainMod, mouse:272, movewindow
       row.className = "note";
       row.tabIndex = 0;
       row.setAttribute("role", "button");
-      row.setAttribute("aria-label", `Jump to line ${n.line}: ${n.text}`);
+      row.setAttribute("aria-label", `Jump to line ${n.line}${n.kind === "legacy" ? " (legacy syntax)" : ""}: ${n.text}`);
       const badge = document.createElement("span");
       badge.className = "ln-badge";
       badge.textContent = "line " + n.line;
       const text = document.createElement("span");
       text.className = "text";
       text.textContent = n.text;
-      row.append(badge, text);
+      row.append(badge);
+      // Legacy notes are informational (the line converted fine), so they
+      // get their own tag rather than reading as another TODO.
+      if (n.kind === "legacy") {
+        row.classList.add("legacy");
+        const tag = document.createElement("span");
+        tag.className = "kind-tag";
+        tag.textContent = "legacy";
+        row.append(tag);
+      }
+      row.append(text);
       row.addEventListener("click", () => jumpToLine(n.line));
       row.addEventListener("keydown", (e) => {
         if (e.key === "Enter" || e.key === " ") { e.preventDefault(); jumpToLine(n.line); }
