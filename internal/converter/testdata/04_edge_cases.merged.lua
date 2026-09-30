@@ -40,6 +40,15 @@ hl.env("LIST_VAR", "a,b,c")
 hl.env("PATH_LIKE", "/opt/one,/opt/two", true)
 
 -- TODO: manual review — malformed env on line 39: NO_COMMA
+
+local looking_glass = "looking-glass-client"
+local gnome_schema = "org.gnome.desktop.interface"
+local theme_cmd = "gsettings set " .. gnome_schema .. " gtk-theme Adwaita"
+local main_mod = "SUPER"
+hl.bind(main_mod .. " + W", hl.dsp.exec_cmd(looking_glass .. " --home $HOME"))
+local dup_name = "one"
+local dup_name_2 = "two"
+local end_ = "three"
 hl.config({
     general = {
         gaps_in = 7,
@@ -48,5 +57,13 @@ hl.config({
     -- Permissions.
     -- env values are split on the FIRST comma only — the rest is the value.
     -- …but a value with no comma at all has no name/value pair to emit.
+    -- hyprlang variable names run to the '=': '-' is legal, and a reference
+    -- resolves to the longest declared name (hyprlang's own lookup order).
+    -- Names that spell the same Lua local, or a Lua keyword, stay distinct.
 })
+
+hl.on("hyprland.start", function()
+    hl.exec_cmd(theme_cmd)
+    hl.exec_cmd("echo " .. dup_name .. " " .. dup_name_2 .. " " .. end_)
+end)
 

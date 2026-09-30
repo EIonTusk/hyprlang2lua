@@ -50,3 +50,21 @@ hl.env("PATH_LIKE", "/opt/one,/opt/two", true)
 
 -- …but a value with no comma at all has no name/value pair to emit.
 -- TODO: manual review — malformed env on line 39: NO_COMMA
+
+-- hyprlang variable names run to the '=': '-' is legal, and a reference
+-- resolves to the longest declared name (hyprlang's own lookup order).
+local looking_glass = "looking-glass-client"
+local gnome_schema = "org.gnome.desktop.interface"
+local theme_cmd = "gsettings set " .. gnome_schema .. " gtk-theme Adwaita"
+local main_mod = "SUPER"
+hl.bind(main_mod .. " + W", hl.dsp.exec_cmd(looking_glass .. " --home $HOME"))
+-- Names that spell the same Lua local, or a Lua keyword, stay distinct.
+local dup_name = "one"
+local dup_name_2 = "two"
+local end_ = "three"
+
+hl.on("hyprland.start", function()
+    hl.exec_cmd(theme_cmd)
+    hl.exec_cmd("echo " .. dup_name .. " " .. dup_name_2 .. " " .. end_)
+end)
+

@@ -276,7 +276,7 @@ func (g *generator) emitBind(d Directive) {
 		}
 	}
 
-	keyExpr := combineModKey(mod, key)
+	keyExpr := combineModKey(mod, key, g.vars)
 	var dispatchExpr, reason string
 	// A mouse bind's dispatcher field carries its own argument (see
 	// buildMouseDispatcher); everything else goes through the name table.
@@ -293,7 +293,7 @@ func (g *generator) emitBind(d Directive) {
 		// name but bad arguments" matters for the user when iterating live.
 		g.writef("-- TODO: manual review on line %d — %s", d.line, reason)
 		g.flag(d.line, reason)
-		g.writef("-- hl.bind(%s, hl.dsp.%s(%s)%s)", keyExpr, sanitizeDispatcher(dispatcher), joinQuoted(args, g.declaredVars), formatBindOpts(opts))
+		g.writef("-- hl.bind(%s, hl.dsp.%s(%s)%s)", keyExpr, sanitizeDispatcher(dispatcher), joinQuoted(args, g.shellVars), formatBindOpts(opts))
 		return
 	}
 
@@ -364,8 +364,9 @@ func normalizeModToken(s string) string {
 // undeclared ref is almost always a typo, and emitting `UNDECLARED .. " + K"`
 // gives a clear nil-concat error at config load instead of a silently
 // non-matching bind. Shell-string contexts use [generator.fmtShell] for the
-// opposite behaviour.
-func combineModKey(mod, key string) string {
+// opposite behaviour. A mod token naming a declared variable resolves through
+// `vars` whatever its spelling, so `$main-mod SHIFT` works like `$mainMod`.
+func combineModKey(mod, key string, vars *varScope) string {
 	mod = strings.TrimSpace(mod)
 	key = strings.TrimSpace(key)
 	// A multi-digit integer in the key slot is a raw evdev keycode (e.g.
@@ -377,28 +378,26 @@ func combineModKey(mod, key string) string {
 		key = "code:" + key
 	}
 	if mod == "" {
-		return formatValue(key, nil)
+		return formatValue(key, vars)
 	}
 	modParts := strings.Fields(mod)
 	if len(modParts) == 0 {
-		return formatValue(key, nil)
+		return formatValue(key, vars)
 	}
 	// Bare $var as the entire mod (common case: $mainMod).
-	if len(modParts) == 1 && isDollarRef(modParts[0]) {
-		return fmt.Sprintf("%s .. %s", luaIdent(modParts[0]), quoteLuaString(" + "+key))
+	if len(modParts) == 1 {
+		if ref, ok := vars.ref(modParts[0]); ok {
+			return fmt.Sprintf("%s .. %s", ref, quoteLuaString(" + "+key))
+		}
 	}
 	// Normalize literal mod tokens (uppercase known modifier names).
-	for i, p := range modParts {
-		if !isDollarRef(p) {
-			modParts[i] = normalizeModToken(p)
-		}
-	}
 	hasRef := false
-	for _, p := range modParts {
-		if isDollarRef(p) {
+	for i, p := range modParts {
+		if _, ok := vars.ref(p); ok {
 			hasRef = true
-			break
+			continue
 		}
+		modParts[i] = normalizeModToken(p)
 	}
 	if !hasRef {
 		return quoteLuaString(strings.Join(modParts, " + ") + " + " + key)
@@ -413,9 +412,9 @@ func combineModKey(mod, key string) string {
 		}
 	}
 	for _, p := range modParts {
-		if isDollarRef(p) {
+		if ref, ok := vars.ref(p); ok {
 			flushLit()
-			pieces = append(pieces, luaIdent(p))
+			pieces = append(pieces, ref)
 			continue
 		}
 		litRun = append(litRun, p)
@@ -461,10 +460,10 @@ func sanitizeDispatcher(name string) string {
 	return b.String()
 }
 
-func joinQuoted(args []string, declared map[string]bool) string {
+func joinQuoted(args []string, vars *varScope) string {
 	parts := make([]string, len(args))
 	for i, a := range args {
-		parts[i] = formatValue(a, declared)
+		parts[i] = formatValue(a, vars)
 	}
 	return strings.Join(parts, ", ")
 }
@@ -1054,7 +1053,7 @@ func (g *generator) emitWindowRule(d Directive, v2 bool) {
 	// level. groupKey serializes the match list so equality is a string
 	// compare; order-preserving on purpose so a user who wrote matchers
 	// in a different order on a second rule won't see surprise merges.
-	preamble := buildMatchPreamble(matches, g.declaredVars)
+	preamble := buildMatchPreamble(matches, g.shellVars)
 	groupKey := groupKeyForMatches(matches)
 
 	g.coalesceRule("window_rule", groupKey, preamble, actionLines)
@@ -1063,16 +1062,16 @@ func (g *generator) emitWindowRule(d Directive, v2 bool) {
 
 // buildMatchPreamble renders a `match = {...},` block (or omits it
 // entirely when matches is empty) at the same indent the legacy emitter
-// used. Returned strings carry no trailing newline. `declared` is the
-// generator's declared-$var set so any `$X` inside a match value
+// used. Returned strings carry no trailing newline. `vars` is the
+// generator's declared-$var scope so any `$X` inside a match value
 // resolves consistently with the rest of the codegen.
-func buildMatchPreamble(matches []matchKV, declared map[string]bool) []string {
+func buildMatchPreamble(matches []matchKV, vars *varScope) []string {
 	if len(matches) == 0 {
 		return nil
 	}
 	out := []string{"    match = {"}
 	for _, m := range matches {
-		out = append(out, fmt.Sprintf("        %s = %s,", luaTableKey(m.k), formatValue(m.v, declared)))
+		out = append(out, fmt.Sprintf("        %s = %s,", luaTableKey(m.k), formatValue(m.v, vars)))
 	}
 	out = append(out, "    },")
 	return out

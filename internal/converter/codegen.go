@@ -72,15 +72,15 @@ type generator struct {
 	// [Options.Polyfill] for the trade-off and the current feature list.
 	polyfill bool
 
-	// declaredVars is the set of `$name` identifiers declared anywhere in
-	// the source via a VarDecl. Populated in a pre-pass before emit so
-	// references to a variable resolve no matter where they appear, even if
-	// the declaration sits later in the file. Used by interpolation to
-	// distinguish a real hyprlang variable from an env-var-ish $X that the
-	// shell should expand at runtime: declared names rewrite to a Lua local,
-	// undeclared names pass through verbatim (preserving the literal `$X`
-	// inside the Lua string so /bin/sh expands it when the exec runs).
-	declaredVars map[string]bool
+	// vars and shellVars hold every `$name` declared anywhere in the source
+	// via a VarDecl. Populated in a pre-pass before emit so references to a
+	// variable resolve no matter where they appear, even if the declaration
+	// sits later in the file. Declared names rewrite to a Lua local in both;
+	// they differ on an undeclared `$X`. vars (plain values) rewrites it to
+	// a Lua local so a typo fails at load; shellVars keeps it verbatim so
+	// /bin/sh expands `$HOME` when the exec runs. See [varScope].
+	vars      *varScope
+	shellVars *varScope
 
 	// neededPolyfills tracks which runtime helper closures were emitted by
 	// any directive in this file. The corresponding `local function …` block
@@ -115,29 +115,35 @@ func newGenerator(opts Options) *generator {
 		stripComments:   opts.StripComments,
 		hoistVariables:  opts.HoistVariables,
 		polyfill:        opts.Polyfill,
-		declaredVars:    map[string]bool{},
 		neededPolyfills: map[string]bool{},
 	}
+	g.vars, g.shellVars = newVarScopes(nil)
 	if opts.MergeCalls {
 		g.mergedTree = newConfTree()
 	}
 	return g
 }
 
-// gatherDecls walks the AST once and records every $var declaration in
-// g.declaredVars. Recurses into Section bodies even though hyprlang
+// gatherDecls walks the AST once and builds g.vars / g.shellVars from every
+// $var declaration. Recurses into Section bodies even though hyprlang
 // doesn't normally allow nested decls — the AST permits them, so we
 // stay defensive. Run before the main emit pass so a reference earlier
 // in the file resolves against a later declaration.
 func (g *generator) gatherDecls(nodes []node) {
-	for _, n := range nodes {
-		switch x := n.(type) {
-		case VarDecl:
-			g.declaredVars[strings.TrimPrefix(x.Name, "$")] = true
-		case Section:
-			g.gatherDecls(x.Body)
+	var order []string
+	var walk func([]node)
+	walk = func(nodes []node) {
+		for _, n := range nodes {
+			switch x := n.(type) {
+			case VarDecl:
+				order = append(order, strings.TrimPrefix(x.Name, "$"))
+			case Section:
+				walk(x.Body)
+			}
 		}
 	}
+	walk(nodes)
+	g.vars, g.shellVars = newVarScopes(order)
 }
 
 // confTree is a small ordered tree used to accumulate config keys before
@@ -418,7 +424,7 @@ func (g *generator) emitHoistedVars(nodes []node) {
 			g.header()
 			emittedAny = true
 		}
-		line := fmt.Sprintf("local %s = %s", luaIdent(v.Name), g.fmtVal(v.Value))
+		line := fmt.Sprintf("local %s = %s", g.vars.ident(v.Name), g.fmtVal(v.Value))
 		if v.Trailing != "" {
 			line += " " + formatLuaComment(v.Trailing)
 		}
@@ -476,7 +482,7 @@ func (g *generator) emit(n node) {
 		}
 		g.header()
 		g.flushConfig()
-		line := fmt.Sprintf("local %s = %s", luaIdent(x.Name), g.fmtVal(x.Value))
+		line := fmt.Sprintf("local %s = %s", g.vars.ident(x.Name), g.fmtVal(x.Value))
 		if x.Trailing != "" {
 			line += " " + formatLuaComment(x.Trailing)
 		}
@@ -863,7 +869,7 @@ func (g *generator) emitConfigSection(s Section, path []string) {
 			g.emitDirective(c)
 		case VarDecl:
 			g.flushConfig()
-			g.writef("local %s = %s", luaIdent(c.Name), g.fmtVal(c.Value))
+			g.writef("local %s = %s", g.vars.ident(c.Name), g.fmtVal(c.Value))
 		}
 	}
 }
@@ -1088,6 +1094,11 @@ func luaIdent(name string) string {
 	if b.Len() == 0 {
 		return "_"
 	}
+	// `$end = …` is a fine hyprlang variable but `local end` is a syntax
+	// error; step off the reserved word.
+	if isLuaKeyword(b.String()) {
+		b.WriteByte('_')
+	}
 	return b.String()
 }
 
@@ -1129,14 +1140,18 @@ func isLuaIdent(s string) bool {
 			return false
 		}
 	}
-	// Also reject Lua reserved words.
+	return !isLuaKeyword(s)
+}
+
+// isLuaKeyword reports whether s is a Lua reserved word.
+func isLuaKeyword(s string) bool {
 	switch s {
 	case "and", "break", "do", "else", "elseif", "end", "false", "for",
 		"function", "goto", "if", "in", "local", "nil", "not", "or",
 		"repeat", "return", "then", "true", "until", "while":
-		return false
+		return true
 	}
-	return true
+	return false
 }
 
 // formatValue chooses a Lua literal for a raw hyprlang value:
@@ -1151,13 +1166,11 @@ func isLuaIdent(s string) bool {
 //     faithful to the source)
 //   - Anything else                    → quoted string
 //
-// `declared` is the set of $var names that have a corresponding VarDecl
-// in this file; a nil set means "treat every $X as declared", which
-// preserves the original behaviour for tests and one-shot helpers.
-// References whose name is not in `declared` pass through verbatim, so
-// an undeclared `$HOME` ends up as the literal text `$HOME` inside the
-// emitted Lua string and the shell expands it at exec time.
-func formatValue(raw string, declared map[string]bool) string {
+// `vars` is the file's declared $var scope; see [varScope] for how a
+// reference is matched and what happens to an undeclared one. A nil scope
+// rewrites every identifier-shaped $X, which preserves the original
+// behaviour for tests and one-shot helpers.
+func formatValue(raw string, vars *varScope) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return "\"\""
@@ -1171,15 +1184,11 @@ func formatValue(raw string, declared map[string]bool) string {
 	case "false", "no", "off":
 		return "false"
 	}
-	// Bare $var (no other content).
-	if strings.HasPrefix(raw, "$") && !strings.ContainsAny(raw, " \t,") && isDollarRef(raw) {
-		name := strings.TrimPrefix(raw, "$")
-		if declared == nil || declared[name] {
-			return luaIdent(raw)
-		}
-		// Undeclared bare ref: preserve as literal text so a downstream
-		// shell expansion still sees the `$NAME` sigil.
-		return quoteLuaString(raw)
+	// Bare $var (no other content). An undeclared bare ref in a
+	// pass-through scope falls through and is quoted verbatim below, so a
+	// downstream shell expansion still sees the `$NAME` sigil.
+	if expr, ok := vars.ref(raw); ok {
+		return expr
 	}
 	// Multi-stop color gradient: two or more rgb()/rgba() tokens, optional
 	// trailing '<n>deg' angle. Rendered as { colors = {...}, angle = N }.
@@ -1188,7 +1197,7 @@ func formatValue(raw string, declared map[string]bool) string {
 	}
 	// String with embedded $var refs → "literal " .. var .. " more".
 	if strings.Contains(raw, "$") {
-		if expr, ok := interpolate(raw, declared); ok {
+		if expr, ok := interpolate(raw, vars); ok {
 			return expr
 		}
 	}
@@ -1197,16 +1206,16 @@ func formatValue(raw string, declared map[string]bool) string {
 
 // fmtVal is the generator-aware default for value formatting in
 // non-shell contexts (bind key strings, config values, dispatcher table
-// fields, …). Passing nil for `declared` keeps the legacy behaviour of
-// rewriting every `$X` to a Lua local, so undeclared references fast-fail
-// at config load with a clear nil-concat error — pointing the user
-// straight at the typo.
+// fields, …). Declared refs resolve by hyprlang's longest-name match; an
+// undeclared `$X` still rewrites to a Lua local, so it fast-fails at config
+// load with a clear nil-concat error — pointing the user straight at the
+// typo.
 //
 // Use [generator.fmtShell] instead for values that will end up inside a
 // /bin/sh -c command line; those need undeclared `$X` preserved as
 // literal text so the shell expands them at exec time.
 func (g *generator) fmtVal(raw string) string {
-	return formatValue(raw, nil)
+	return formatValue(raw, g.vars)
 }
 
 // fmtShell formats a value destined for a /bin/sh -c command (the cmd
@@ -1215,7 +1224,7 @@ func (g *generator) fmtVal(raw string) string {
 // `$HOME` / `$XDG_*` survive verbatim so the shell expands them — matching
 // hyprlang's own pass-through semantic.
 func (g *generator) fmtShell(raw string) string {
-	return formatValue(raw, g.declaredVars)
+	return formatValue(raw, g.shellVars)
 }
 
 // formatCssGap parses hyprlang's CSS-shorthand gap value into a typed
@@ -1405,13 +1414,15 @@ func isLuaNumber(s string) bool {
 // plain quoting and the literal `$X` sigil survives in the output for
 // the shell to expand at runtime.
 //
-// `declared` controls which `$X` tokens are real hyprlang variables:
-//   - nil       → rewrite every `$X` to a Lua local (legacy behavior;
-//                 used by tests and one-shot callers that haven't built
-//                 a declared-set).
-//   - non-nil   → rewrite only `$X` where declared[X] is true; preserve
-//                 the rest as literal text inside the surrounding string.
-func interpolate(raw string, declared map[string]bool) (string, bool) {
+// At each '$' the longest declared name the text continues with wins, as in
+// hyprlang, so `$looking-glass` and `$center-float-large` resolve whole even
+// though '-' is not an identifier character. Otherwise an identifier-shaped
+// `$X` is undeclared, and `vars` decides its fate:
+//   - nil or !passUndeclared → rewrite it to a Lua local (legacy behavior;
+//                 fails fast on a typo).
+//   - passUndeclared → preserve it as literal text inside the surrounding
+//                 string.
+func interpolate(raw string, vars *varScope) (string, bool) {
 	var parts []string
 	var lit strings.Builder
 	flushLit := func() {
@@ -1425,6 +1436,13 @@ func interpolate(raw string, declared map[string]bool) (string, bool) {
 	for i < len(raw) {
 		c := raw[i]
 		if c == '$' && i+1 < len(raw) {
+			if name, ok := vars.match(raw[i+1:]); ok {
+				flushLit()
+				parts = append(parts, vars.ident(name))
+				i += 1 + len(name)
+				found = true
+				continue
+			}
 			// Hyprlang identifiers must not start with a digit, same rule as
 			// Lua locals (see luaIdent / isDollarRef). Leading-digit forms
 			// like $2 are shell/awk positionals — e.g. inside an exec arg
@@ -1447,8 +1465,7 @@ func interpolate(raw string, declared map[string]bool) (string, bool) {
 				break
 			}
 			if j > i+1 {
-				name := raw[i+1 : j]
-				if declared != nil && !declared[name] {
+				if vars != nil && vars.passUndeclared {
 					// Undeclared identifier: keep the `$NAME` sigil in the
 					// emitted Lua string so a downstream shell can expand
 					// it at runtime (matching hyprlang's own behaviour —
