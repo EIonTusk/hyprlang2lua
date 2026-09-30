@@ -22,8 +22,9 @@ import (
 // `$X` rewrites to a Lua local (the legacy behaviour tests and one-shot
 // helpers rely on).
 type varScope struct {
-	names  []string          // declared names without '$', longest first
-	idents map[string]string // declared name → its Lua local
+	names  []string            // declared names without '$', longest first
+	idents map[string]string   // declared name → its Lua local
+	defs   map[string][]varDef // declared name → its declarations, in source order
 
 	// passUndeclared picks what happens to a `$X` naming no declared
 	// variable. true: keep it as literal text, for values a shell or an
@@ -33,23 +34,33 @@ type varScope struct {
 	passUndeclared bool
 }
 
-// newVarScopes builds the two scopes a generator needs from the declared
-// names in source order: one for plain values (undeclared refs fail fast)
-// and one for shell-bound values (undeclared refs pass through). Both share
-// the same name → Lua local mapping.
+// varDef is one `$name = value` declaration: name without '$', raw value
+// text, and the source line it sits on.
+type varDef struct {
+	name, value string
+	line        int
+}
+
+// newVarScopes builds the two scopes a generator needs from the
+// declarations in source order: one for plain values (undeclared refs fail
+// fast) and one for shell-bound values (undeclared refs pass through). Both
+// share the same name → Lua local mapping and declaration table.
 //
 // Lua locals are assigned in declaration order. Distinct hyprlang names can
 // map to the same Lua spelling (`$a-b` and `$a_b` both become a_b), so a
 // later name that collides gets a numeric suffix rather than silently
 // aliasing the earlier variable.
-func newVarScopes(declOrder []string) (values, shell *varScope) {
+func newVarScopes(decls []varDef) (values, shell *varScope) {
 	idents := map[string]string{}
 	taken := map[string]bool{}
+	defs := map[string][]varDef{}
 	var names []string
-	for _, n := range declOrder {
+	for _, d := range decls {
+		n := d.name
 		if n == "" {
 			continue
 		}
+		defs[n] = append(defs[n], d)
 		if _, seen := idents[n]; seen {
 			continue // redeclaration reuses its local
 		}
@@ -70,9 +81,70 @@ func newVarScopes(declOrder []string) (values, shell *varScope) {
 		}
 		return names[i] < names[j]
 	})
-	values = &varScope{names: names, idents: idents}
-	shell = &varScope{names: names, idents: idents, passUndeclared: true}
+	values = &varScope{names: names, idents: idents, defs: defs}
+	shell = &varScope{names: names, idents: idents, defs: defs, passUndeclared: true}
 	return values, shell
+}
+
+// valueAt returns the raw value `$name` had when hyprlang reached line: the
+// latest declaration above it. A name only declared further down resolves
+// to its first declaration, the same forward-reference leniency the rest of
+// the converter applies (see gatherDecls).
+func (v *varScope) valueAt(name string, line int) (string, bool) {
+	if v == nil || len(v.defs[name]) == 0 {
+		return "", false
+	}
+	ds := v.defs[name]
+	val := ds[0].value
+	for _, d := range ds {
+		if d.line >= line {
+			break
+		}
+		val = d.value
+	}
+	return val, true
+}
+
+// Limits for [varScope.expandFields]. maxRuleVarDepth bounds nesting
+// (`$a = $b`, `$b = class:x`) so a self-referential `$a = $a` terminates;
+// hyprlang caps its own expansion loop the same way. maxRuleFields bounds
+// fan-out: `$a = $b, $b` nested a dozen levels deep would otherwise expand
+// to thousands of fields, and the converter runs on untrusted input in the
+// browser. No real rule comes near either limit; past them, references are
+// left unexpanded and surface as TODOs.
+const (
+	maxRuleVarDepth = 16
+	maxRuleFields   = 256
+)
+
+// expandFields applies hyprlang's textual variable expansion to the
+// comma-separated fields of a rule line. hyprlang substitutes variables
+// into the raw line before the rule parser sees it, so a variable can carry
+// rule syntax — a matcher (`$center-float = class:^(pavucontrol)$`), an
+// effect, or several comma-separated fields at once. A field that is
+// exactly one declared reference is replaced by that variable's value,
+// re-split on commas and expanded again. Everything else is left for value
+// formatting, so `class:$cls` still becomes a Lua local reference.
+func (v *varScope) expandFields(parts []string, line int) []string {
+	var out []string
+	for _, f := range parts {
+		v.expandField(f, line, 0, &out)
+	}
+	return out
+}
+
+func (v *varScope) expandField(f string, line, depth int, out *[]string) {
+	if depth < maxRuleVarDepth && len(*out) < maxRuleFields && strings.HasPrefix(f, "$") {
+		if n, ok := v.match(f[1:]); ok && len(n) == len(f)-1 {
+			if val, ok := v.valueAt(n, line); ok {
+				for _, p := range splitCommas(val) {
+					v.expandField(p, line, depth+1, out)
+				}
+				return
+			}
+		}
+	}
+	*out = append(*out, f)
 }
 
 // match returns the longest declared name that s starts with, where s is
