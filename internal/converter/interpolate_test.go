@@ -59,7 +59,7 @@ func TestInterpolate(t *testing.T) {
 // text in the surrounding string (so a downstream /bin/sh -c gets the raw
 // $HOME / $XDG_* sigil and expands it at runtime).
 func TestInterpolate_DeclaredSet(t *testing.T) {
-	decls := map[string]bool{"mainMod": true, "terminal": true}
+	_, decls := newVarScopes([]string{"mainMod", "terminal"})
 	cases := []struct {
 		name string
 		in   string
@@ -88,5 +88,64 @@ func TestInterpolate_DeclaredSet(t *testing.T) {
 				t.Errorf("interpolate(%q, decls):\n  got:  %s\n  want: %s", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestInterpolate_HyprlangNames pins hyprlang's own variable lookup: a name
+// is everything between '$' and '=' at declaration, and a reference is the
+// longest declared name the text continues with — not an identifier scan.
+// `$looking-glass` must resolve whole, and `$center-float-large` must win
+// over `$center-float`.
+func TestInterpolate_HyprlangNames(t *testing.T) {
+	values, shell := newVarScopes([]string{
+		"looking-glass", "gnome-schema", "center-float", "center-float-large", "mainMod",
+	})
+	cases := []struct {
+		name  string
+		scope *varScope
+		in    string
+		want  string
+		ok    bool
+	}{
+		{"hyphenated whole value", shell, "$looking-glass", "looking_glass", true},
+		{"hyphenated mid-string", values,
+			"gsettings set $gnome-schema gtk-theme Adwaita",
+			`"gsettings set " .. gnome_schema .. " gtk-theme Adwaita"`, true},
+		{"longest name wins", values, "float, $center-float-large",
+			`"float, " .. center_float_large`, true},
+		{"shorter name still matches alone", values, "$center-float, x",
+			`center_float .. ", x"`, true},
+		// hyprlang substitutes by substring, so a declared name is replaced
+		// even when more identifier characters follow it.
+		{"substring match like hyprlang", shell, "$mainModX",
+			`mainMod .. "X"`, true},
+		{"undeclared hyphenated prefix stays shell text", shell, "echo $looking-for",
+			``, false},
+		{"undeclared value ref still fails fast", values, "$typo-here",
+			`typo .. "-here"`, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := interpolate(tc.in, tc.scope)
+			if ok != tc.ok {
+				t.Fatalf("ok = %v, want %v (got expr %q)", ok, tc.ok, got)
+			}
+			if ok && got != tc.want {
+				t.Errorf("interpolate(%q):\n  got:  %s\n  want: %s", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestVarScopeIdents covers the hyprlang name → Lua local mapping: distinct
+// names that spell the same Lua identifier must not alias one another, and a
+// name that is a Lua keyword must not become one.
+func TestVarScopeIdents(t *testing.T) {
+	values, _ := newVarScopes([]string{"a-b", "a_b", "a.b", "end", "a-b"})
+	want := map[string]string{"a-b": "a_b", "a_b": "a_b_2", "a.b": "a_b_3", "end": "end_"}
+	for name, id := range want {
+		if got := values.ident(name); got != id {
+			t.Errorf("ident(%q) = %q, want %q", name, got, id)
+		}
 	}
 }

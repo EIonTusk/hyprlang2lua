@@ -32,7 +32,7 @@ func (g *generator) buildDispatcher(name string, args []string) (string, string)
 // `echo a, b`. Everything else ignores it — reconstructing the string is only
 // lossy for the comma joiner itself.
 func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs string) (string, string) {
-	decls := g.declaredVars
+	decls := g.shellVars
 	polyfill := g.polyfill
 	switch name {
 	// ---- Process / system ----
@@ -72,7 +72,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		return "hl.dsp.no_op()", ""
 	case "forceidle":
 		// Wiki: `force_idle(seconds)` — positional numeric.
-		return fmt.Sprintf("hl.dsp.force_idle(%s)", formatValue(joinArgs(args), nil)), ""
+		return fmt.Sprintf("hl.dsp.force_idle(%s)", g.fmtVal(joinArgs(args))), ""
 	case "dpms":
 		// 0.54: "on, off, or toggle. For specific monitor add monitor
 		// name after a space" → single space-separated arg. 0.55 wiki:
@@ -108,7 +108,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		}
 		return fmt.Sprintf(
 			"hl.dsp.pass({ window = %s })",
-			formatValue(joined, nil),
+			g.fmtVal(joined),
 		), ""
 	case "sendshortcut":
 		// 0.54: "mod, key[, window]" — comma-separated. 0.55 wiki:
@@ -123,7 +123,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 			quoteLuaString(strings.TrimSpace(args[1])),
 		)
 		if len(args) >= 3 {
-			expr += ", window = " + formatValue(strings.TrimSpace(args[2]), nil)
+			expr += ", window = " + g.fmtVal(strings.TrimSpace(args[2]))
 		}
 		return expr + " })", ""
 	case "sendkeystate":
@@ -139,7 +139,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 			quoteLuaString(strings.TrimSpace(args[2])),
 		)
 		if len(args) >= 4 {
-			expr += ", window = " + formatValue(strings.TrimSpace(args[3]), nil)
+			expr += ", window = " + g.fmtVal(strings.TrimSpace(args[3]))
 		}
 		return expr + " })", ""
 	case "loadconfig":
@@ -176,7 +176,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		}
 		return fmt.Sprintf(
 			"hl.dsp.cursor.move({ x = %s, y = %s })",
-			formatValue(fields[0], nil), formatValue(fields[1], nil),
+			g.fmtVal(fields[0]), g.fmtVal(fields[1]),
 		), ""
 	case "movecursortocorner":
 		// 0.54: "direction, 0 - 3". 0.55 wiki:
@@ -187,7 +187,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		}
 		return fmt.Sprintf(
 			"hl.dsp.cursor.move_to_corner({ corner = %s })",
-			formatValue(arg, nil),
+			g.fmtVal(arg),
 		), ""
 
 	// ---- Workspaces ----
@@ -216,7 +216,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		}
 		return fmt.Sprintf(
 			"hl.dsp.workspace.rename({ workspace = %s, name = %s })",
-			formatValue(first, nil), quoteLuaString(rest),
+			g.fmtVal(first), quoteLuaString(rest),
 		), ""
 	case "swapactiveworkspaces":
 		// Wiki: `swap_monitors({ monitor1, monitor2 })`. Legacy hyprlang
@@ -240,7 +240,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		}
 		return fmt.Sprintf(
 			"hl.dsp.workspace.move({ workspace = %s, monitor = %s })",
-			formatValue(ws, nil), quoteLuaString(mon),
+			g.fmtVal(ws), quoteLuaString(mon),
 		), ""
 	case "focusworkspaceoncurrentmonitor":
 		// 0.54 wiki: arg is a workspace selector. Native in 0.55+:
@@ -257,7 +257,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		// time via hl.get_active_workspace().
 		return fmt.Sprintf(
 			`function() local w = hl.get_active_workspace(); if not w then return end; hl.dispatch(hl.dsp.workspace.move({ workspace = w.id, monitor = %s })) end`,
-			formatValue(joinArgs(args), nil),
+			g.fmtVal(joinArgs(args)),
 		), ""
 
 	// ---- Windows ----
@@ -332,7 +332,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		}
 		return fmt.Sprintf(
 			"hl.dsp.window.fullscreen_state({ internal = %s, client = %s, action = %s })",
-			formatValue(fields[0], nil), formatValue(fields[1], nil), quoteLuaString(action),
+			g.fmtVal(fields[0]), g.fmtVal(fields[1]), quoteLuaString(action),
 		), ""
 	case "togglefloating":
 		return "hl.dsp.window.float({ action = \"toggle\" })", ""
@@ -414,7 +414,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		}
 		return fmt.Sprintf(
 			"hl.dsp.window.tag({ tag = %s, window = %s })",
-			quoteLuaString(tag), formatValue(win, nil),
+			quoteLuaString(tag), g.fmtVal(win),
 		), ""
 	case "cleartagswindow":
 		// Wiki: `clear_tags({ window? })` — the window field is optional,
@@ -436,7 +436,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		return fmt.Sprintf(
 			"hl.dsp.window.alter_zorder({ mode = %s, window = %s })",
 			quoteLuaString(strings.TrimSpace(args[0])),
-			formatValue(strings.TrimSpace(args[1]), nil),
+			g.fmtVal(strings.TrimSpace(args[1])),
 		), ""
 	case "bringactivetotop":
 		return "hl.dsp.window.bring_to_top()", ""
@@ -449,7 +449,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		}
 		return fmt.Sprintf(
 			"hl.dsp.window.signal({ signal = %s })",
-			formatValue(strings.TrimSpace(args[0]), nil),
+			g.fmtVal(strings.TrimSpace(args[0])),
 		), ""
 	case "signalwindow":
 		// 0.54 wiki: "window,signal, e.g. class:Alacritty,9" — comma-
@@ -460,8 +460,8 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		}
 		return fmt.Sprintf(
 			"hl.dsp.window.signal({ window = %s, signal = %s })",
-			formatValue(strings.TrimSpace(args[0]), nil),
-			formatValue(strings.TrimSpace(args[1]), nil),
+			g.fmtVal(strings.TrimSpace(args[0])),
+			g.fmtVal(strings.TrimSpace(args[1])),
 		), ""
 	case "setprop":
 		// 0.54 wiki: "Sets a window property. window property value"
@@ -507,7 +507,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		} else {
 			expr = fmt.Sprintf(
 				"hl.dsp.window.set_prop({ prop = %s, value = %s, window = %s })",
-				quoteLuaString(prop), quoteLuaString(value), formatValue(window, nil),
+				quoteLuaString(prop), quoteLuaString(value), g.fmtVal(window),
 			)
 		}
 		if hasLock {
@@ -586,7 +586,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		if joined := strings.TrimSpace(joinArgs(args)); joined != "" {
 			return fmt.Sprintf(
 				"hl.dsp.window.move({ out_of_group = true, window = %s })",
-				formatValue(joined, nil),
+				g.fmtVal(joined),
 			), ""
 		}
 		return "hl.dsp.window.move({ out_of_group = true })", ""
@@ -647,7 +647,7 @@ func (g *generator) buildDispatcherRaw(name string, args []string, rawArgs strin
 		}
 		return fmt.Sprintf(
 			"hl.dsp.window.swap({ target = %s })",
-			formatValue(arg, nil),
+			g.fmtVal(arg),
 		), ""
 	case "togglesplit":
 		return `hl.dsp.layout("togglesplit")`, ""
@@ -902,9 +902,9 @@ func joinArgs(args []string) string {
 //
 // 'relative' controls the default polarity (delta for *active/*window,
 // absolute for *pixel); the 'exact' keyword overrides to absolute regardless.
-// `declared` is the active declared-$var set so an optional `, $win` trailing
+// `vars` is the active declared-$var scope so an optional `, $win` trailing
 // selector resolves through the same rules as elsewhere in the codegen.
-func pixelDispatchExpr(call, raw string, relative, polyfill bool, declared map[string]bool) (string, string) {
+func pixelDispatchExpr(call, raw string, relative, polyfill bool, vars *varScope) (string, string) {
 	raw = strings.TrimSpace(raw)
 	exact := false
 	if strings.HasPrefix(strings.ToLower(raw), "exact") && (len(raw) == 5 || raw[5] == ' ' || raw[5] == '\t') {
@@ -927,7 +927,7 @@ func pixelDispatchExpr(call, raw string, relative, polyfill bool, declared map[s
 		if !polyfill {
 			return "", fmt.Sprintf("percent coords %q have no direct Lua API equivalent (Hyprland 0.55's x/y are numeric-only); enable polyfill to emit a runtime helper closure", raw)
 		}
-		return percentPolyfillExpr(call, parts[0], parts[1], relative, exact, window, declared)
+		return percentPolyfillExpr(call, parts[0], parts[1], relative, exact, window, vars)
 	}
 
 	x, okX := pixelInt(parts[0])
@@ -941,7 +941,7 @@ func pixelDispatchExpr(call, raw string, relative, polyfill bool, declared map[s
 		b.WriteString(", relative = true")
 	}
 	if window != "" {
-		fmt.Fprintf(&b, ", window = %s", formatValue(window, declared))
+		fmt.Fprintf(&b, ", window = %s", formatValue(window, vars))
 	}
 	b.WriteString(" })")
 	return b.String(), ""
@@ -955,7 +955,7 @@ func pixelDispatchExpr(call, raw string, relative, polyfill bool, declared map[s
 // otherwise the active window is used. A nil-guard skips the dispatch when
 // the reference object isn't available, matching the legacy dispatcher's
 // silent no-op when there is no active window.
-func percentPolyfillExpr(call, xTok, yTok string, relative, exact bool, window string, declared map[string]bool) (string, string) {
+func percentPolyfillExpr(call, xTok, yTok string, relative, exact bool, window string, vars *varScope) (string, string) {
 	isMove := strings.Contains(call, ".move")
 	var setup, refX, refY string
 	switch {
@@ -963,7 +963,7 @@ func percentPolyfillExpr(call, xTok, yTok string, relative, exact bool, window s
 		setup = "local m = hl.get_active_monitor(); if not m then return end"
 		refX, refY = "m.width", "m.height"
 	case window != "":
-		setup = fmt.Sprintf("local w = hl.get_window(%s); if not w then return end", formatValue(window, declared))
+		setup = fmt.Sprintf("local w = hl.get_window(%s); if not w then return end", formatValue(window, vars))
 		if isMove {
 			refX, refY = "w.at.x", "w.at.y"
 		} else {
@@ -990,7 +990,7 @@ func percentPolyfillExpr(call, xTok, yTok string, relative, exact bool, window s
 		tbl.WriteString(", relative = true")
 	}
 	if window != "" {
-		fmt.Fprintf(&tbl, ", window = %s", formatValue(window, declared))
+		fmt.Fprintf(&tbl, ", window = %s", formatValue(window, vars))
 	}
 	tbl.WriteString(" }")
 
@@ -1025,10 +1025,10 @@ func pixelInt(tok string) (string, bool) {
 
 // joinFormatted formats each arg via formatValue() and joins with ', '.
 // Use when the dispatcher signature expects positional Lua values.
-func joinFormatted(args []string, declared map[string]bool) string {
+func joinFormatted(args []string, vars *varScope) string {
 	out := make([]string, len(args))
 	for i, a := range args {
-		out[i] = formatValue(a, declared)
+		out[i] = formatValue(a, vars)
 	}
 	return strings.Join(out, ", ")
 }
