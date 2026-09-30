@@ -97,7 +97,7 @@ Flags:
 | `-d, --dir DIR`           | walk a directory, writing `*.lua` next to every `*.conf`            |
 | `    --in-place`          | with `--dir`, overwrite existing `*.lua` siblings (off by default)  |
 | `-o, --out FILE`          | write to FILE (single-file mode; default stdout)                    |
-| `-r, --report`            | print `translated / passthrough / flagged / coverage%` to stderr    |
+| `-r, --report`            | print `translated / passthrough / flagged / coverage%` to stderr, plus one note per flagged line and per `(legacy)` line (see below) |
 | `-c, --check`             | exit code `3` if any directive was flagged for manual review        |
 | `    --no-merge`          | emit a separate `hl.X(...)` call per source line instead of merging mergeable APIs into one call. Merging is on by default and currently applies to `hl.config` — in practice it folds every per-section `hl.config({...})` into one call, with section-separating comments preserved inside the merged table. Other `hl.*` APIs (bind, window_rule, monitor, env, device, …) take one spec per call by design and pass through unchanged. |
 | `    --no-polyfill`       | disable runtime Lua helper closures used to preserve hyprlang features without a direct Hyprland 0.55 typed-API equivalent (currently: percent-form `resizeactive`/`moveactive`, source globbing). Polyfill is on by default; passing this flag forces strict output and flags any such feature for manual review instead. |
@@ -222,6 +222,13 @@ Exit codes: `0` success, `1` I/O or conversion error, `2` usage/flag error,
 
 Anything not in either list is preserved with a `-- TODO: manual review`
 comment, contributes to `flagged` in the report, and trips `--check`.
+
+Lines written in a syntax that recent hyprlang Hyprland rejected are still
+converted, but the report adds a `(legacy)` note (and a `legacy=N` count) for
+each one: such a line had no effect on those versions, so the converted rule
+may change behaviour. Legacy notes are informational and don't trip `--check`.
+Currently: a `windowrule` whose window field is a bare regex
+(`windowrule = float, ^(kitty)$`), which Hyprland 0.48 and later reject.
 
 ## Architecture
 

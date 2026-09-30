@@ -68,12 +68,14 @@ func convert(this js.Value, args []js.Value) any {
 	result.Set("translated", rpt.Translated)
 	result.Set("passthrough", rpt.Passthrough)
 	result.Set("flagged", rpt.Flagged)
+	result.Set("legacy", rpt.Legacy)
 	result.Set("coverage", rpt.CoveragePct())
 	notes := js.Global().Get("Array").New()
 	for i, n := range rpt.Notes {
 		entry := js.Global().Get("Object").New()
 		entry.Set("line", n.Line)
 		entry.Set("text", n.Text)
+		entry.Set("kind", string(n.Kind))
 		notes.SetIndex(i, entry)
 	}
 	result.Set("notes", notes)

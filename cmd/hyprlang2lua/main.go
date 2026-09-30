@@ -183,9 +183,17 @@ func isTerminal(f *os.File) bool {
 
 func printReport(w io.Writer, name string, r converter.Report) {
 	pct := r.CoveragePct() * 100
-	fmt.Fprintf(w, "[%s] translated=%d passthrough=%d flagged=%d coverage=%.1f%%\n",
-		name, r.Translated, r.Passthrough, r.Flagged, pct)
+	legacy := ""
+	if r.Legacy > 0 {
+		legacy = fmt.Sprintf(" legacy=%d", r.Legacy)
+	}
+	fmt.Fprintf(w, "[%s] translated=%d passthrough=%d flagged=%d%s coverage=%.1f%%\n",
+		name, r.Translated, r.Passthrough, r.Flagged, legacy, pct)
 	for _, n := range r.Notes {
-		fmt.Fprintf(w, "  line %d: %s\n", n.Line, n.Text)
+		tag := ""
+		if n.Kind == converter.NoteLegacy {
+			tag = " (legacy)"
+		}
+		fmt.Fprintf(w, "  line %d%s: %s\n", n.Line, tag, n.Text)
 	}
 }
