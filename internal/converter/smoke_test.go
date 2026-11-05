@@ -392,8 +392,10 @@ binds = , XF86AudioMute & XF86AudioMicMute, exec, mute-all
 // 'bindrl') and the unknown-letter fallback path. The single-letter cases
 // are already in TestBindSuffixCodes.
 func TestBindSuffixCombinations(t *testing.T) {
-	src := `bindel = , XF86AudioRaiseVolume, exec, foo
+	src := `$mainMod = SUPER
+bindel = , XF86AudioRaiseVolume, exec, foo
 bindrl = , XF86AudioPlay, exec, bar
+bind = CTRL ALT $mainMod SHIFT, comma, exec, bag
 bindz = SUPER, X, exec, baz
 `
 	out, rpt, err := Convert(src)
@@ -405,6 +407,9 @@ bindz = SUPER, X, exec, baz
 	}
 	if !strings.Contains(out, `{ locked = true, release = true }`) {
 		t.Errorf("bindrl did not produce { locked + release }:\n%s", out)
+	}
+	if !strings.Contains(out, `"CTRL + ALT + " .. mainMod .. " + SHIFT + comma"`) {
+		t.Errorf("bind did not produce { abc }:\n%s", out)
 	}
 	if !strings.Contains(out, `unknown bind flag(s) "z"`) {
 		t.Errorf("bindz did not surface as an unknown-flag TODO:\n%s", out)
