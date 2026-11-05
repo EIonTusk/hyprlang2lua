@@ -402,30 +402,27 @@ func combineModKey(mod, key string, vars *varScope) string {
 	if !hasRef {
 		return quoteLuaString(strings.Join(modParts, " + ") + " + " + key)
 	}
-	// Mix of $var and literals — emit a concat chain.
+	// Mix of $var and literals — emit a concat chain. Every pair of adjacent
+	// parts (ref or literal) needs a " + " between them, so the separator is
+	// accumulated into the pending literal text and flushed before each ref:
+	// 'CTRL $a SHIFT $b' -> "CTRL + " .. a .. " + SHIFT + " .. b .. " + key".
 	var pieces []string
-	var litRun []string
-	flushLit := func() {
-		if len(litRun) > 0 {
-			pieces = append(pieces, quoteLuaString(strings.Join(litRun, " + ")))
-			litRun = nil
+	lit := ""
+	for i, p := range modParts {
+		if i > 0 {
+			lit += " + "
 		}
-	}
-	for _, p := range modParts {
 		if ref, ok := vars.ref(p); ok {
-			flushLit()
+			if lit != "" {
+				pieces = append(pieces, quoteLuaString(lit))
+			}
+			lit = ""
 			pieces = append(pieces, ref)
 			continue
 		}
-		litRun = append(litRun, p)
+		lit += p
 	}
-	// Final tail with the key glued on.
-	tail := " + " + key
-	if len(litRun) > 0 {
-		pieces = append(pieces, quoteLuaString(" + "+strings.Join(litRun, " + ")+tail))
-	} else {
-		pieces = append(pieces, quoteLuaString(tail))
-	}
+	pieces = append(pieces, quoteLuaString(lit+" + "+key))
 	return strings.Join(pieces, " .. ")
 }
 

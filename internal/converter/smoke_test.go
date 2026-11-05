@@ -414,6 +414,41 @@ bindz = SUPER, X, exec, baz
 	}
 }
 
+// TestBindModVarCombos covers mod fields that mix $var references with
+// literal modifiers. Every adjacent pair must be joined by " + " regardless
+// of where the refs sit, or the concatenated string fuses names together
+// (e.g. "CTRL + ALTSUPER + SHIFT").
+func TestBindModVarCombos(t *testing.T) {
+	cases := []struct {
+		name, mods, want string
+	}{
+		{"literals before var", "CTRL ALT $mainMod SHIFT",
+			`"CTRL + ALT + " .. mainMod .. " + SHIFT + K"`},
+		{"literal before var only", "CTRL $mainMod",
+			`"CTRL + " .. mainMod .. " + K"`},
+		{"var then literal", "$mainMod SHIFT",
+			`mainMod .. " + SHIFT + K"`},
+		{"literal between vars", "$mainMod CTRL $alt",
+			`mainMod .. " + CTRL + " .. alt .. " + K"`},
+		{"adjacent vars", "$mainMod $alt",
+			`mainMod .. " + " .. alt .. " + K"`},
+		{"vars at both ends", "$mainMod SHIFT CTRL $alt",
+			`mainMod .. " + SHIFT + CTRL + " .. alt .. " + K"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "$mainMod = SUPER\n$alt = ALT\nbind = " + tc.mods + ", K, exec, foo\n"
+			out, _, err := Convert(src)
+			if err != nil {
+				t.Fatalf("Convert: %v", err)
+			}
+			if !strings.Contains(out, "hl.bind("+tc.want+",") {
+				t.Errorf("mods %q: want hl.bind(%s, ...) in:\n%s", tc.mods, tc.want, out)
+			}
+		})
+	}
+}
+
 // TestWindowRuleBlockFormMatcherNormalization confirms that the block
 // form (`windowrule { match:KEY = VALUE, … }`) routes its matcher keys
 // through normalizeMatchKey, the same way the directive `KEY:VALUE`
