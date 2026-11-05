@@ -392,10 +392,8 @@ binds = , XF86AudioMute & XF86AudioMicMute, exec, mute-all
 // 'bindrl') and the unknown-letter fallback path. The single-letter cases
 // are already in TestBindSuffixCodes.
 func TestBindSuffixCombinations(t *testing.T) {
-	src := `$mainMod = SUPER
-bindel = , XF86AudioRaiseVolume, exec, foo
+	src := `bindel = , XF86AudioRaiseVolume, exec, foo
 bindrl = , XF86AudioPlay, exec, bar
-bind = CTRL ALT $mainMod SHIFT, comma, exec, bag
 bindz = SUPER, X, exec, baz
 `
 	out, rpt, err := Convert(src)
@@ -408,14 +406,46 @@ bindz = SUPER, X, exec, baz
 	if !strings.Contains(out, `{ locked = true, release = true }`) {
 		t.Errorf("bindrl did not produce { locked + release }:\n%s", out)
 	}
-	if !strings.Contains(out, `"CTRL + ALT + " .. mainMod .. " + SHIFT + comma"`) {
-		t.Errorf("bind did not produce { abc }:\n%s", out)
-	}
 	if !strings.Contains(out, `unknown bind flag(s) "z"`) {
 		t.Errorf("bindz did not surface as an unknown-flag TODO:\n%s", out)
 	}
 	if rpt.Flagged == 0 {
 		t.Errorf("expected at least one flag for the unknown suffix")
+	}
+}
+
+// TestBindModVarCombos covers mod fields that mix $var references with
+// literal modifiers. Every adjacent pair must be joined by " + " regardless
+// of where the refs sit, or the concatenated string fuses names together
+// (e.g. "CTRL + ALTSUPER + SHIFT").
+func TestBindModVarCombos(t *testing.T) {
+	cases := []struct {
+		name, mods, want string
+	}{
+		{"literals before var", "CTRL ALT $mainMod SHIFT",
+			`"CTRL + ALT + " .. mainMod .. " + SHIFT + K"`},
+		{"literal before var only", "CTRL $mainMod",
+			`"CTRL + " .. mainMod .. " + K"`},
+		{"var then literal", "$mainMod SHIFT",
+			`mainMod .. " + SHIFT + K"`},
+		{"literal between vars", "$mainMod CTRL $alt",
+			`mainMod .. " + CTRL + " .. alt .. " + K"`},
+		{"adjacent vars", "$mainMod $alt",
+			`mainMod .. " + " .. alt .. " + K"`},
+		{"vars at both ends", "$mainMod SHIFT CTRL $alt",
+			`mainMod .. " + SHIFT + CTRL + " .. alt .. " + K"`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "$mainMod = SUPER\n$alt = ALT\nbind = " + tc.mods + ", K, exec, foo\n"
+			out, _, err := Convert(src)
+			if err != nil {
+				t.Fatalf("Convert: %v", err)
+			}
+			if !strings.Contains(out, "hl.bind("+tc.want+",") {
+				t.Errorf("mods %q: want hl.bind(%s, ...) in:\n%s", tc.mods, tc.want, out)
+			}
+		})
 	}
 }
 
