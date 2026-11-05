@@ -407,7 +407,7 @@ func combineModKey(mod, key string, vars *varScope) string {
 	var litRun []string
 	flushLit := func() {
 		if len(litRun) > 0 {
-			pieces = append(pieces, quoteLuaString(strings.Join(litRun, " + ")))
+			pieces = append(pieces, quoteLuaString(strings.Join(litRun, " + ") + " + "))
 			litRun = nil
 		}
 	}
