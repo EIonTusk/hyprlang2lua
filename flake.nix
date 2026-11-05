@@ -22,7 +22,7 @@
           pname = "hyprlang2lua";
           # Keep this in sync with the git tag the AUR PKGBUILD points at.
           # `nix flake update` will re-fetch nixpkgs but won't change this.
-          version = "0.7.2";
+          version = "0.7.3";
 
           src = self;
 
